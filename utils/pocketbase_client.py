@@ -171,23 +171,54 @@ def delete_record(record_id):
         return False, str(e)
 
 
-def check_record_exists(amazon_orderid):
-    """Kayıt var mı kontrol et - UPDATED: amazon_orderid field'ını kullan"""
+def check_record_exists(amazon_orderid, amazon_account=None):
+    """
+    Kayıt var mı kontrol et - UPDATED: Composite key (orderid + account)
+
+    Args:
+        amazon_orderid (str): Amazon order ID
+        amazon_account (str, optional): Amazon account name
+
+    Returns:
+        tuple: (exists: bool, existing_record: dict or None)
+    """
     try:
+        # Composite key approach - both orderid and account must match
+        if amazon_account:
+            filter_query = f'amazon_orderid="{amazon_orderid}" && amazon_account="{amazon_account}"'
+            print(f"DEBUG - Composite key search: orderid={amazon_orderid}, account={amazon_account}")
+        else:
+            # Fallback - only orderid (for backward compatibility)
+            filter_query = f'amazon_orderid="{amazon_orderid}"'
+            print(f"DEBUG - Single key search: orderid={amazon_orderid}")
+
         response = requests.get(
             f"{POCKETBASE_URL}/api/collections/{COLLECTION_NAME}/records",
-            params={"filter": f'amazon_orderid="{amazon_orderid}"'},
+            params={"filter": filter_query},
             headers=get_headers(),
             timeout=10
         )
 
+        print(f"DEBUG - Filter query: {filter_query}")
+        print(f"DEBUG - Search response status: {response.status_code}")
+
         if response.status_code == 200:
             items = response.json().get("items", [])
-            return len(items) > 0, items[0] if items else None
+            print(f"DEBUG - Found {len(items)} existing records")
+
+            if items:
+                existing_record = items[0]
+                print(f"DEBUG - Existing record ID: {existing_record.get('id', 'N/A')}")
+                return True, existing_record
+            else:
+                print("DEBUG - No existing records found")
+                return False, None
         else:
+            print(f"DEBUG - Search failed with status: {response.status_code}")
             return False, None
 
-    except Exception:
+    except Exception as e:
+        print(f"DEBUG - Exception in check_record_exists: {e}")
         return False, None
 
 
@@ -230,7 +261,7 @@ def get_record_count():
 
 
 def test_pocketbase_connection():
-    """PocketBase bağlantısını test et"""
+    """PocketBase bağlantısını test et - amazon_account field kontrolü dahil"""
     try:
         # Basit health check
         response = requests.get(
@@ -249,7 +280,22 @@ def test_pocketbase_connection():
 
             if collection_response.status_code == 200:
                 record_count = collection_response.json().get("totalItems", 0)
-                return True, f"PocketBase is accessible and '{COLLECTION_NAME}' collection contains {record_count} records"
+
+                # amazon_account field'ının varlığını kontrol et
+                if record_count > 0:
+                    # Sample record al ve amazon_account field'ını kontrol et
+                    sample_record = collection_response.json().get("items", [])
+                    if sample_record:
+                        has_account_field = 'amazon_account' in sample_record[0]
+                        if has_account_field:
+                            return True, f"PocketBase is accessible, '{COLLECTION_NAME}' collection contains {record_count} records with amazon_account field ✅"
+                        else:
+                            return True, f"PocketBase is accessible, '{COLLECTION_NAME}' collection contains {record_count} records ⚠️ amazon_account field missing!"
+                    else:
+                        return True, f"PocketBase is accessible and '{COLLECTION_NAME}' collection contains {record_count} records"
+                else:
+                    return True, f"PocketBase is accessible and '{COLLECTION_NAME}' collection is empty (amazon_account field status unknown)"
+
             elif collection_response.status_code == 401:
                 return False, "Authentication failed - Invalid token"
             elif collection_response.status_code == 403:
@@ -270,7 +316,16 @@ def test_pocketbase_connection():
 
 
 def bulk_upload_records(records, progress_callback=None):
-    """Toplu kayıt yükleme - UPDATED: Doğru field adları ile"""
+    """
+    Toplu kayıt yükleme - UPDATED: Composite key (amazon_orderid + amazon_account)
+
+    Args:
+        records (list): Upload edilecek kayıtlar
+        progress_callback (function, optional): Progress callback fonksiyonu
+
+    Returns:
+        dict: Upload sonuçları (added, updated, errors)
+    """
     results = {
         "added": 0,
         "updated": 0,
@@ -279,24 +334,31 @@ def bulk_upload_records(records, progress_callback=None):
     }
 
     total_records = len(records)
+    print(f"DEBUG - Starting bulk upload of {total_records} records")
 
     for i, record in enumerate(records, 1):
         if progress_callback:
-            # UPDATED: amazon_orderid field'ını kullan
+            # Progress callback için amazon_orderid kullan
             progress_callback(i, total_records, record.get('amazon_orderid', 'N/A'))
 
         try:
-            # UPDATED: JSON'daki gerçek field adını kullan
+            # UPDATED: Composite key extraction
             amazon_orderid = record.get("amazon_orderid")
+            amazon_account = record.get("amazon_account")
+
+            print(f"DEBUG - Processing record {i}: orderid={amazon_orderid}, account={amazon_account}")
+
             if not amazon_orderid:
                 results["errors"] += 1
                 results["error_details"].append(f"Record {i}: Missing amazon_orderid")
+                print(f"DEBUG - Record {i}: Missing amazon_orderid")
                 continue
 
-            # Kayıt var mı kontrol et
-            exists, existing_record = check_record_exists(amazon_orderid)
+            # Enhanced existence check with composite key
+            exists, existing_record = check_record_exists(amazon_orderid, amazon_account)
 
             if exists:
+                print(f"DEBUG - Record exists, updating: {amazon_orderid} ({amazon_account})")
                 # Güncelle
                 update_data = record.copy()
                 update_data.pop("master_no", None)  # master_no'yu güncelleme sırasında kaldır
@@ -304,36 +366,47 @@ def bulk_upload_records(records, progress_callback=None):
 
                 if success:
                     results["updated"] += 1
+                    print(f"DEBUG - Update successful for {amazon_orderid}")
                 else:
                     results["errors"] += 1
-                    results["error_details"].append(f"Update error for {amazon_orderid}: {response}")
+                    error_msg = f"Update error for {amazon_orderid} ({amazon_account}): {response}"
+                    results["error_details"].append(error_msg)
+                    print(f"DEBUG - Update failed: {error_msg}")
             else:
+                print(f"DEBUG - New record, adding: {amazon_orderid} ({amazon_account})")
                 # Yeni kayıt ekle
                 success, response = upload_record(record)
 
                 if success:
                     results["added"] += 1
+                    print(f"DEBUG - Add successful for {amazon_orderid}")
                 else:
                     results["errors"] += 1
-                    results["error_details"].append(f"Add error for {amazon_orderid}: {response}")
+                    error_msg = f"Add error for {amazon_orderid} ({amazon_account}): {response}"
+                    results["error_details"].append(error_msg)
+                    print(f"DEBUG - Add failed: {error_msg}")
 
         except Exception as e:
             results["errors"] += 1
-            results["error_details"].append(f"Record {i} processing error: {str(e)}")
+            error_msg = f"Record {i} processing error: {str(e)}"
+            results["error_details"].append(error_msg)
+            print(f"DEBUG - Processing exception: {error_msg}")
 
+    print(f"DEBUG - Bulk upload completed: {results}")
     return results
 
 
 def get_unique_field_for_matching():
-    """Matching için kullanılacak unique field'ı döndür"""
-    return "amazon_orderid"
+    """Matching için kullanılacak unique field'ları döndür - UPDATED: Composite key"""
+    return ["amazon_orderid", "amazon_account"]
 
 
 def validate_record_fields(record):
-    """Kayıt field'larını validate et"""
+    """Kayıt field'larını validate et - UPDATED: amazon_account field dahil"""
     required_fields = [
         "master_no",
-        "amazon_orderid",  # UPDATED: Doğru field adı
+        "amazon_orderid",
+        "amazon_account",  # YENİ ZORUNLU FIELD
         "ebay_order_number"
     ]
 
@@ -362,7 +435,7 @@ def clean_record_for_upload(record):
 
 
 def test_single_record_upload():
-    """Tek kayıt ile test yapma fonksiyonu"""
+    """Tek kayıt ile test yapma fonksiyonu - UPDATED: amazon_account field dahil"""
     test_record = {
         "master_no": 999,
         "ebay_order_creation_date": "Jun 1, 2025",
@@ -376,6 +449,7 @@ def test_single_record_upload():
         "ebay_ship_to_country": "US",
         "ebay_refunds": None,
         "amazon_orderid": "TEST-AMAZON-123",
+        "amazon_account": "test_account",  # YENİ FIELD
         "amazon_orderdate": "2025-06-02",
         "amazon_deliverystatus": "Delivered",
         "amazon_product_title": "Test Amazon Product",
@@ -390,19 +464,29 @@ def test_single_record_upload():
         "exchange_rate_used": 35.00
     }
 
-    print("DEBUG - Testing single record upload...")
+    print("DEBUG - Testing single record upload with amazon_account field...")
     success, response = upload_record(test_record)
 
     if success:
         print("DEBUG - Single record upload SUCCESS!")
-        return True
+
+        # Test existence check with composite key
+        print("DEBUG - Testing composite key existence check...")
+        exists, existing_record = check_record_exists("TEST-AMAZON-123", "test_account")
+
+        if exists:
+            print("DEBUG - Composite key check SUCCESS!")
+            return True
+        else:
+            print("DEBUG - Composite key check FAILED!")
+            return False
     else:
         print(f"DEBUG - Single record upload FAILED: {response}")
         return False
 
 
 def get_collection_schema():
-    """Collection schema'sını al"""
+    """Collection schema'sını al - amazon_account field kontrolü dahil"""
     try:
         response = requests.get(
             f"{POCKETBASE_URL}/api/collections/{COLLECTION_NAME}",
@@ -413,6 +497,16 @@ def get_collection_schema():
         if response.status_code == 200:
             schema = response.json()
             print(f"DEBUG - Collection schema: {schema}")
+
+            # amazon_account field'ının varlığını kontrol et
+            schema_fields = schema.get('schema', [])
+            has_amazon_account = any(field.get('name') == 'amazon_account' for field in schema_fields)
+
+            if has_amazon_account:
+                print("DEBUG - amazon_account field found in schema ✅")
+            else:
+                print("DEBUG - amazon_account field NOT found in schema ❌")
+
             return schema
         else:
             print(f"DEBUG - Could not get schema, status: {response.status_code}")
@@ -421,3 +515,92 @@ def get_collection_schema():
     except Exception as e:
         print(f"DEBUG - Schema fetch error: {e}")
         return None
+
+
+def get_records_by_account(amazon_account, limit=10):
+    """Belirli bir Amazon account'a ait kayıtları getir - YENİ FONKSIYON"""
+    try:
+        response = requests.get(
+            f"{POCKETBASE_URL}/api/collections/{COLLECTION_NAME}/records",
+            params={
+                "filter": f'amazon_account="{amazon_account}"',
+                "perPage": limit,
+                "sort": "-created"
+            },
+            headers=get_headers(),
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            return response.json().get("items", [])
+        else:
+            print(f"DEBUG - get_records_by_account failed: {response.status_code}")
+            return []
+
+    except Exception as e:
+        print(f"DEBUG - get_records_by_account error: {e}")
+        return []
+
+
+def get_account_summary():
+    """Account bazında özet bilgi al - YENİ FONKSIYON"""
+    try:
+        response = requests.get(
+            f"{POCKETBASE_URL}/api/collections/{COLLECTION_NAME}/records",
+            params={"perPage": 500},  # Büyük limit - tüm kayıtları almaya çalış
+            headers=get_headers(),
+            timeout=15
+        )
+
+        if response.status_code == 200:
+            records = response.json().get("items", [])
+
+            # Account bazında gruplama
+            account_summary = {}
+            for record in records:
+                account = record.get('amazon_account', 'unknown')
+                if account not in account_summary:
+                    account_summary[account] = {
+                        'count': 0,
+                        'total_profit': 0,
+                        'total_cost': 0
+                    }
+
+                account_summary[account]['count'] += 1
+                account_summary[account]['total_profit'] += float(record.get('calculated_profit_usd', 0))
+                account_summary[account]['total_cost'] += float(record.get('calculated_amazon_cost_usd', 0))
+
+            print(f"DEBUG - Account summary: {account_summary}")
+            return account_summary
+        else:
+            print(f"DEBUG - get_account_summary failed: {response.status_code}")
+            return {}
+
+    except Exception as e:
+        print(f"DEBUG - get_account_summary error: {e}")
+        return {}
+
+
+def delete_records_by_account(amazon_account):
+    """Belirli bir account'ın tüm kayıtlarını sil - YENİ FONKSIYON"""
+    try:
+        # Önce account'a ait kayıtları bul
+        records = get_records_by_account(amazon_account, limit=1000)
+
+        deleted_count = 0
+        error_count = 0
+
+        for record in records:
+            success, message = delete_record(record['id'])
+            if success:
+                deleted_count += 1
+            else:
+                error_count += 1
+                print(f"DEBUG - Delete failed for record {record['id']}: {message}")
+
+        print(f"DEBUG - Account deletion summary: {deleted_count} deleted, {error_count} errors")
+        return deleted_count, error_count
+
+    except Exception as e:
+        print(f"DEBUG - delete_records_by_account error: {e}")
+        return 0, 1

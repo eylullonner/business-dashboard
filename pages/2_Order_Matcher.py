@@ -729,10 +729,47 @@ class DropshippingMatcher:
                 'exchange_rate_used': None
             }
 
+    def extract_account_name_from_filename(self, filename: str) -> str:
+        """Dosya isminden Amazon account ismini çıkar"""
+        if not filename:
+            return "unknown"
+
+        # Dosya uzantısını kaldır
+        name_without_ext = filename.rsplit('.', 1)[0]
+
+        # Underscore ile split et ve ilk kısmı al
+        parts = name_without_ext.split('_')
+        if len(parts) > 1:
+            return parts[0]  # "buyer1_amazon.json" -> "buyer1"
+
+        # Eğer underscore yoksa dosya isminin ilk kelimesini al
+        first_word = name_without_ext.split()[0] if name_without_ext.split() else name_without_ext
+        return first_word
+
+    def combine_amazon_files(self, amazon_files_data: List[Tuple[str, pd.DataFrame]]) -> pd.DataFrame:
+        """Çoklu Amazon dosyalarını birleştir ve account bilgisi ekle"""
+        combined_df = pd.DataFrame()
+
+        for filename, amazon_df in amazon_files_data:
+            # Account ismini extract et
+            account_name = self.extract_account_name_from_filename(filename)
+
+            # Her kayda account bilgisi ekle
+            amazon_df_copy = amazon_df.copy()
+            amazon_df_copy['amazon_account'] = account_name
+
+            # Birleştir
+            combined_df = pd.concat([combined_df, amazon_df_copy], ignore_index=True)
+
+            print(f"DEBUG - Added {len(amazon_df)} records from {filename} (account: {account_name})")
+
+        print(f"DEBUG - Combined total: {len(combined_df)} Amazon records from {len(amazon_files_data)} accounts")
+        return combined_df
+
     def create_match_record(self, ebay_data: Dict, amazon_data: Dict,
                             match_details: Dict, match_counter: int,
                             exclude_fields: List[str] = None) -> Dict:
-        """Eşleştirme kaydı oluştur"""
+        """Eşleştirme kaydı oluştur - Amazon account field dahil"""
         if exclude_fields is None:
             exclude_fields = []
 
@@ -748,12 +785,16 @@ class DropshippingMatcher:
             if field_name not in exclude_fields:
                 match_record[field_name] = value
 
-        # Amazon alanlarını ekle
+        # Amazon alanlarını ekle (amazon_account dahil)
         for col, value in amazon_data.items():
             clean_col = str(col).replace(' ', '_').replace('/', '_').lower()
             field_name = f'amazon_{clean_col}'
             if field_name not in exclude_fields:
                 match_record[field_name] = value
+
+        # Amazon account field'ını özel olarak handle et
+        if 'amazon_account' in amazon_data:
+            match_record['amazon_account'] = amazon_data['amazon_account']
 
         # DEBUG: Amazon products kontrol
         print(f"DEBUG - amazon_data keys: {list(amazon_data.keys())}")
@@ -867,12 +908,12 @@ class DropshippingMatcher:
         return match_record
 
     # UPDATED exclude_fields list - amazon_shippingaddress'i exclude et
-    def match_orders(self, ebay_df: pd.DataFrame, amazon_df: pd.DataFrame,
+    def match_orders(self, ebay_df: pd.DataFrame, amazon_combined_df: pd.DataFrame,
                      ebay_mapping: Dict[str, str] = None,
                      amazon_mapping: Dict[str, str] = None,
                      exclude_fields: List[str] = None,
                      progress_callback=None) -> pd.DataFrame:
-        """Ana eşleştirme fonksiyonu"""
+        """Ana eşleştirme fonksiyonu - Çoklu Amazon hesabı desteği"""
 
         # UPDATED Default exclude list
         if exclude_fields is None:
@@ -901,11 +942,11 @@ class DropshippingMatcher:
                 "ebay_shipping_labels",
                 "ebay_payment_dispute_fee",
                 "ebay_expenses",
-                "ebay_order_earnings",  # YENİ EKLENEN
+                "ebay_order_earnings",
                 "amazon_extractedat",
                 "amazon_shippingaddress",
                 "amazon_products",
-                "amazon_ordertotal",  # YENİ EKLENEN
+                "amazon_ordertotal",
                 "calculated_is_profitable"
             ]
 
@@ -913,18 +954,21 @@ class DropshippingMatcher:
         if ebay_mapping is None:
             ebay_mapping = self.auto_detect_columns(ebay_df, 'ebay')
         if amazon_mapping is None:
-            amazon_mapping = self.auto_detect_columns(amazon_df, 'amazon')
+            amazon_mapping = self.auto_detect_columns(amazon_combined_df, 'amazon')
 
         # Veriyi normalize et
         ebay_normalized = self.normalize_data(ebay_df, ebay_mapping, 'ebay')
-        amazon_normalized = self.normalize_data(amazon_df, amazon_mapping, 'amazon')
+        amazon_normalized = self.normalize_data(amazon_combined_df, amazon_mapping, 'amazon')
 
         # Orijinal veri
         ebay_original = ebay_df.copy()
-        amazon_original = amazon_df.copy()
+        amazon_original = amazon_combined_df.copy()
 
         matches = []
         match_counter = 1
+
+        print(
+            f"DEBUG - Starting matching: {len(ebay_normalized)} eBay orders vs {len(amazon_normalized)} Amazon orders")
 
         # Her eBay siparişi için eşleştirme yap
         for ebay_idx, ebay_order in ebay_normalized.iterrows():
@@ -981,13 +1025,18 @@ class DropshippingMatcher:
             matches.append(match_record)
             match_counter += 1
 
+            # Debug için account bilgisini logla
+            account_name = amazon_original_data.get('amazon_account', 'unknown')
+            print(
+                f"DEBUG - Match {match_counter - 1}: eBay {ebay_order_dict.get('order_id', 'N/A')} -> Amazon {amazon_original_data.get('order_id', 'N/A')} (Account: {account_name})")
+
         return pd.DataFrame(matches)
 
 
 # ========== STREAMLIT UI ==========
 
 def main():
-    st.markdown("### 📊 Enhanced Amazon Format Support")
+    st.markdown("### 📊 Enhanced Multi-Amazon Account Support")
 
     tab1, tab2, tab3 = st.tabs(["📤 File Upload", "⚙️ Matching Settings", "📊 Results"])
 
@@ -1041,98 +1090,84 @@ def main():
                     st.error(f"❌ eBay file could not be read: {e}")
 
         with col2:
-            st.markdown("#### 📦 Amazon Orders")
-            amazon_file = st.file_uploader(
-                "Select Amazon JSON file",
+            st.markdown("#### 📦 Amazon Orders (Multiple Accounts)")
+            amazon_files = st.file_uploader(
+                "Select Amazon JSON files",
                 type=['json'],
                 key="amazon_upload",
-                help="Upload your order data exported from Amazon (supports all formats)"
+                help="Upload multiple Amazon JSON files from different accounts",
+                accept_multiple_files=True
             )
 
-            if amazon_file:
+            if amazon_files:
                 try:
-                    amazon_data = json.loads(amazon_file.read())
+                    amazon_files_data = []
+                    total_orders = 0
 
-                    # JSON yapısını handle et
-                    if isinstance(amazon_data, list):
-                        amazon_df = pd.DataFrame(amazon_data)
-                    elif isinstance(amazon_data, dict):
-                        possible_keys = ['orders', 'data', 'results', 'items', 'orderDetails']
-                        amazon_orders = None
+                    st.success(f"✅ {len(amazon_files)} Amazon files uploaded")
 
-                        for key in possible_keys:
-                            if key in amazon_data:
-                                amazon_orders = amazon_data[key]
-                                st.info(f"✅ Amazon orders found in '{key}' field")
-                                break
+                    for amazon_file in amazon_files:
+                        amazon_data = json.loads(amazon_file.read())
 
-                        amazon_df = pd.DataFrame(amazon_orders if amazon_orders else [amazon_data])
-                    else:
-                        amazon_df = pd.DataFrame([amazon_data])
+                        # JSON yapısını handle et
+                        if isinstance(amazon_data, list):
+                            amazon_df = pd.DataFrame(amazon_data)
+                        elif isinstance(amazon_data, dict):
+                            possible_keys = ['orders', 'data', 'results', 'items', 'orderDetails']
+                            amazon_orders = None
 
-                    # Format detection ve preview
-                    temp_matcher = DropshippingMatcher()
-                    detected_format = temp_matcher.detect_amazon_format(amazon_df)
+                            for key in possible_keys:
+                                if key in amazon_data:
+                                    amazon_orders = amazon_data[key]
+                                    break
 
-                    if detected_format == "new":
-                        st.success(f"✅ {len(amazon_df)} Amazon orders loaded (NEW FORMAT)")
-                        st.info("🔄 Auto-converting new format to compatible structure...")
+                            amazon_df = pd.DataFrame(amazon_orders if amazon_orders else [amazon_data])
+                        else:
+                            amazon_df = pd.DataFrame([amazon_data])
 
-                        # Address preview için sample göster
-                        if len(amazon_df) > 0:
-                            sample_row = amazon_df.iloc[0]
+                        amazon_files_data.append((amazon_file.name, amazon_df))
+                        total_orders += len(amazon_df)
 
-                            with st.expander("🔍 Address Extraction Preview"):
-                                st.write("**Sample Row Address Processing:**")
+                        # Format detection ve preview
+                        temp_matcher = DropshippingMatcher()
+                        detected_format = temp_matcher.detect_amazon_format(amazon_df)
+                        account_name = temp_matcher.extract_account_name_from_filename(amazon_file.name)
 
+                        st.info(
+                            f"📁 **{amazon_file.name}** → {len(amazon_df)} orders (Account: **{account_name}**, Format: {detected_format.upper()})")
+
+                    st.success(f"🎯 **Total: {total_orders} Amazon orders from {len(amazon_files)} accounts**")
+                    st.session_state.amazon_files_data = amazon_files_data
+
+                    # Account summary
+                    with st.expander("🔍 Account Summary"):
+                        temp_matcher = DropshippingMatcher()
+                        for filename, amazon_df in amazon_files_data:
+                            account_name = temp_matcher.extract_account_name_from_filename(filename)
+                            detected_format = temp_matcher.detect_amazon_format(amazon_df)
+
+                            col_a, col_b, col_c = st.columns(3)
+                            with col_a:
+                                st.write(f"**Account:** {account_name}")
+                            with col_b:
+                                st.write(f"**Orders:** {len(amazon_df)}")
+                            with col_c:
+                                st.write(f"**Format:** {detected_format.upper()}")
+
+                            # Sample address extraction için
+                            if len(amazon_df) > 0 and detected_format == "new":
+                                sample_row = amazon_df.iloc[0]
                                 if 'shippingAddress' in sample_row and pd.notna(sample_row['shippingAddress']):
                                     shipping_obj = sample_row['shippingAddress']
-
-                                    # Test address extraction
                                     address_parts = temp_matcher.extract_address_from_shipping_object(shipping_obj)
                                     full_address = temp_matcher.build_full_address_string(address_parts)
+                                    if full_address:
+                                        st.write(f"**Sample Address:** {full_address[:50]}...")
 
-                                    col_a, col_b = st.columns(2)
-
-                                    with col_a:
-                                        st.write("**Raw shippingAddress:**")
-                                        if isinstance(shipping_obj, str):
-                                            try:
-                                                shipping_display = json.loads(shipping_obj)
-                                                st.json(shipping_display)
-                                            except:
-                                                st.code(shipping_obj)
-                                        else:
-                                            st.json(shipping_obj)
-
-                                    with col_b:
-                                        st.write("**Extracted full_address:**")
-                                        st.code(full_address)
-
-                                        st.write("**Address parts:**")
-                                        for key, value in address_parts.items():
-                                            st.write(f"• {key}: {value}")
-
-                    elif detected_format == "old":
-                        st.success(f"✅ {len(amazon_df)} Amazon orders loaded (OLD FORMAT)")
-                        st.info("📋 Old format uses direct ship_to field")
-                    else:
-                        st.warning(f"⚠️ {len(amazon_df)} Amazon orders loaded (UNKNOWN FORMAT)")
-                        st.error("🔍 Manual column mapping may be required")
-
-                    st.session_state.amazon_df = amazon_df
-
-                    # Kolon önizlemesi
-                    with st.expander("🔍 Amazon Columns"):
-                        st.write(f"**Total columns:** {len(amazon_df.columns)}")
-                        st.write(f"**Detected format:** {detected_format.upper()}")
-                        for col in amazon_df.columns[:10]:
-                            st.write(f"• {col}")
-                        if len(amazon_df.columns) > 10:
-                            st.write(f"... and {len(amazon_df.columns) - 10} more columns")
+                            st.write("---")
 
                 except Exception as e:
-                    st.error(f"❌ Amazon file could not be read: {e}")
+                    st.error(f"❌ Amazon files could not be read: {e}")
 
     with tab2:
         st.subheader("⚙️ Matching Parameters")
@@ -1161,104 +1196,95 @@ def main():
             if total_weight != 100:
                 st.warning(f"⚠️ Total weight: {total_weight}% (should be 100%)")
 
-    with col2:
-        st.markdown("#### 📋 Excluded Columns")
-        st.write("Columns to exclude from JSON output:")
+        with col2:
+            st.markdown("#### 📋 Excluded Columns")
+            st.write("Columns to exclude from JSON output:")
 
-        # CORRECTED exclude_options - Amazon product fields KORUNUYOR
-        exclude_options = [
-            "match_score",
-            "days_difference",
-            "ebay_transaction_currency",
-            "ebay_item_price",
-            "ebay_quantity",
-            "ebay_shipping_and_handling",
-            "ebay_ebay_collected_tax",
-            "ebay_item_subtotal",
-            "ebay_seller_collected_tax",
-            "ebay_discount",
-            "ebay_payout_currency",
-            "ebay_gross_amount",
-            "ebay_final_value_fee_-_fixed",
-            "ebay_final_value_fee_-_variable",
-            "ebay_below_standard_performance_fee",
-            "ebay_very_high_\"item_not_as_described\"_fee",
-            "ebay_international_fee",
-            "ebay_deposit_processing_fee",
-            "ebay_regulatory_operating_fee",
-            "ebay_promoted_listing_standard_fee",
-            "ebay_charity_donation",
-            "ebay_shipping_labels",
-            "ebay_payment_dispute_fee",
-            "ebay_expenses",
-            "ebay_order_earnings",
-            "amazon_extractedat",
-            "amazon_shippingaddress",
-            "amazon_products",  # Array exclude edilir, separate fields korunur
-            "amazon_ordertotal",
-            "cost_calculation_method",
-            "calculated_is_profitable"
-            # NOT: amazon_product_title, amazon_product_url, amazon_asin BU LİSTEDE YOK!
-        ]
+            # CORRECTED exclude_options - Amazon product fields KORUNUYOR
+            exclude_options = [
+                "match_score",
+                "days_difference",
+                "ebay_transaction_currency",
+                "ebay_item_price",
+                "ebay_quantity",
+                "ebay_shipping_and_handling",
+                "ebay_ebay_collected_tax",
+                "ebay_item_subtotal",
+                "ebay_seller_collected_tax",
+                "ebay_discount",
+                "ebay_payout_currency",
+                "ebay_gross_amount",
+                "ebay_final_value_fee_-_fixed",
+                "ebay_final_value_fee_-_variable",
+                "ebay_below_standard_performance_fee",
+                "ebay_very_high_\"item_not_as_described\"_fee",
+                "ebay_international_fee",
+                "ebay_deposit_processing_fee",
+                "ebay_regulatory_operating_fee",
+                "ebay_promoted_listing_standard_fee",
+                "ebay_charity_donation",
+                "ebay_shipping_labels",
+                "ebay_payment_dispute_fee",
+                "ebay_expenses",
+                "ebay_order_earnings",
+                "amazon_extractedat",
+                "amazon_shippingaddress",
+                "amazon_products",
+                "amazon_ordertotal",
+                "cost_calculation_method",
+                "calculated_is_profitable"
+            ]
 
-        # Varsayılan olarak hepsini seç
-        selected_excludes = st.multiselect(
-            "Select columns to exclude:",
-            options=exclude_options,
-            default=exclude_options,  # Hepsini varsayılan olarak exclude et
-            help="These columns will not appear in the result JSON"
-        )
+            # Varsayılan olarak hepsini seç
+            selected_excludes = st.multiselect(
+                "Select columns to exclude:",
+                options=exclude_options,
+                default=exclude_options,
+                help="These columns will not appear in the result JSON"
+            )
 
     with tab3:
         st.subheader("📊 Matching Results")
 
         # Eşleştirme başlatma butonu
-        if 'ebay_df' in st.session_state and 'amazon_df' in st.session_state:
+        if 'ebay_df' in st.session_state and 'amazon_files_data' in st.session_state:
 
-            # Address Quality Check bölümü
-            with st.expander("🔍 Pre-Matching Address Quality Check"):
-                st.write("### Amazon Address Quality Analysis")
+            # Pre-matching info
+            with st.expander("🔍 Pre-Matching Information"):
+                st.write("### Multi-Account Amazon Processing")
 
-                amazon_df = st.session_state.amazon_df
+                amazon_files_data = st.session_state.amazon_files_data
                 temp_matcher = DropshippingMatcher()
 
-                # Amazon formatını detect et
-                amazon_format = temp_matcher.detect_amazon_format(amazon_df)
-                st.info(f"📊 **Detected Format:** {amazon_format.upper()}")
+                # Account breakdown
+                for filename, amazon_df in amazon_files_data:
+                    account_name = temp_matcher.extract_account_name_from_filename(filename)
+                    amazon_format = temp_matcher.detect_amazon_format(amazon_df)
 
-                # Sample normalize et
-                sample_size = min(5, len(amazon_df))
-                sample_df = amazon_df.head(sample_size).copy()
-                normalized_sample = temp_matcher.normalize_amazon_data_enhanced(sample_df)
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Account", account_name)
+                    col2.metric("Orders", len(amazon_df))
+                    col3.metric("Format", amazon_format.upper())
 
-                # Address quality metrics
-                total_rows = len(normalized_sample)
-                has_full_address = (normalized_sample['full_address'].notna() &
-                                    (normalized_sample['full_address'] != '')).sum()
+                    # Test normalization
+                    try:
+                        sample_df = amazon_df.head(1).copy()
+                        normalized_sample = temp_matcher.normalize_amazon_data_enhanced(sample_df)
+                        has_address = (normalized_sample['full_address'].notna() &
+                                       (normalized_sample['full_address'] != '')).sum()
+                        address_quality = "✅ Good" if has_address > 0 else "⚠️ Poor"
+                        col4.metric("Address Quality", address_quality)
+                    except:
+                        col4.metric("Address Quality", "❌ Error")
 
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Total Sample Rows", total_rows)
-                col2.metric("Has Full Address", has_full_address)
-                col3.metric("Address Success Rate", f"{(has_full_address / total_rows * 100):.1f}%")
-
-                # Sample address'leri göster
-                if has_full_address > 0:
-                    st.write("**Sample Extracted Addresses:**")
-                    for idx, row in normalized_sample.iterrows():
-                        if pd.notna(row['full_address']) and row['full_address']:
-                            st.write(f"**Row {idx}:**")
-                            address_lines = str(row['full_address']).split('\n')
-                            for line in address_lines:
-                                st.write(f"  {line}")
-                            st.write("---")
-                            break
+                    st.write("---")
 
             col1, col2, col3 = st.columns([1, 2, 1])
 
             with col2:
-                if st.button("🚀 Start Matching", type="primary", use_container_width=True):
+                if st.button("🚀 Start Multi-Account Matching", type="primary", use_container_width=True):
 
-                    with st.spinner("🔄 Order matching in progress..."):
+                    with st.spinner("🔄 Multi-account order matching in progress..."):
                         try:
                             # Matcher'ı oluştur
                             matcher = DropshippingMatcher(threshold=threshold)
@@ -1285,13 +1311,17 @@ def main():
                                     progress_bar.progress(progress)
                                 status_text.text(f"🔍 Processing: {current}/{total} - {order_id}")
 
-                            # Format detection
-                            amazon_format = matcher.detect_amazon_format(st.session_state.amazon_df)
-                            status_text.text(f"📊 Detected Amazon format: {amazon_format.upper()}")
+                            # Amazon dosyalarını birleştir
+                            status_text.text("🔄 Combining Amazon accounts...")
+                            amazon_files_data = st.session_state.amazon_files_data
+                            amazon_combined_df = matcher.combine_amazon_files(amazon_files_data)
+
+                            status_text.text(
+                                f"✅ Combined {len(amazon_combined_df)} orders from {len(amazon_files_data)} Amazon accounts")
 
                             # Address normalization test
                             status_text.text("🔄 Testing address normalization...")
-                            test_amazon_sample = st.session_state.amazon_df.head(1).copy()
+                            test_amazon_sample = amazon_combined_df.head(1).copy()
                             test_normalized = matcher.normalize_amazon_data_enhanced(test_amazon_sample)
 
                             if len(test_normalized) > 0 and pd.notna(test_normalized.iloc[0]['full_address']):
@@ -1299,12 +1329,12 @@ def main():
                             else:
                                 st.warning("⚠️ Address normalization may have issues")
 
-                            status_text.text("🔍 Starting order matching algorithm...")
+                            status_text.text("🔍 Starting multi-account order matching algorithm...")
 
                             # Eşleştirme yap
                             results = matcher.match_orders(
                                 ebay_df=st.session_state.ebay_df,
-                                amazon_df=st.session_state.amazon_df,
+                                amazon_combined_df=amazon_combined_df,
                                 ebay_mapping=None,  # Auto-detect
                                 amazon_mapping=None,  # Auto-detect
                                 exclude_fields=selected_excludes,
@@ -1313,13 +1343,20 @@ def main():
 
                             # Progress tamamlandı
                             progress_bar.progress(1.0)
-                            status_text.text("✅ Matching completed!")
+                            status_text.text("✅ Multi-account matching completed!")
 
                             # Sonuçları session'a kaydet
                             st.session_state.match_results = results
 
                             if len(results) > 0:
                                 st.success(f"🎉 Matching completed! {len(results)} matches found")
+
+                                # Account bazında breakdown
+                                if 'amazon_account' in results.columns:
+                                    account_breakdown = results['amazon_account'].value_counts()
+                                    st.info("📊 **Matches by Account:**")
+                                    for account, count in account_breakdown.items():
+                                        st.write(f"• **{account}:** {count} matches")
 
                                 # Kâr özeti
                                 if 'calculated_profit_usd' in results.columns:
@@ -1345,7 +1382,7 @@ def main():
                                 st.code(traceback.format_exc())
 
         else:
-            st.info("📤 Please upload both JSON files first")
+            st.info("📤 Please upload eBay JSON file and multiple Amazon JSON files first")
 
         # Sonuçları göster
         if 'match_results' in st.session_state:
@@ -1382,18 +1419,46 @@ def main():
                     else:
                         st.metric("📊 Average Profit", "N/A")
 
+                # Account bazında metrikler
+                if 'amazon_account' in results.columns:
+                    st.markdown("#### 📊 Account Performance")
+
+                    account_metrics = results.groupby('amazon_account').agg({
+                        'calculated_profit_usd': ['count', 'sum', 'mean'],
+                        'calculated_amazon_cost_usd': 'sum',
+                        'calculated_ebay_earning_usd': 'sum'
+                    }).round(2)
+
+                    account_metrics.columns = ['Orders', 'Total Profit', 'Avg Profit', 'Total Cost', 'Total Revenue']
+                    account_metrics['ROI %'] = (
+                                (account_metrics['Total Profit'] / account_metrics['Total Cost']) * 100).round(1)
+
+                    st.dataframe(account_metrics, use_container_width=True)
+
                 # Kâr dağılımı grafiği
                 if 'calculated_profit_usd' in results.columns and PLOTLY_AVAILABLE:
                     st.markdown("#### 📊 Profit Distribution")
 
                     try:
-                        fig = px.histogram(
-                            results,
-                            x='calculated_profit_usd',
-                            title="Order Profit Distribution",
-                            nbins=30,
-                            labels={'calculated_profit_usd': 'Profit ($)', 'count': 'Number of Orders'}
-                        )
+                        # Account bazında color coding
+                        if 'amazon_account' in results.columns:
+                            fig = px.histogram(
+                                results,
+                                x='calculated_profit_usd',
+                                color='amazon_account',
+                                title="Order Profit Distribution by Account",
+                                nbins=30,
+                                labels={'calculated_profit_usd': 'Profit ($)', 'count': 'Number of Orders'}
+                            )
+                        else:
+                            fig = px.histogram(
+                                results,
+                                x='calculated_profit_usd',
+                                title="Order Profit Distribution",
+                                nbins=30,
+                                labels={'calculated_profit_usd': 'Profit ($)', 'count': 'Number of Orders'}
+                            )
+
                         fig.update_layout(
                             xaxis_title="Profit ($)",
                             yaxis_title="Number of Orders"
@@ -1409,6 +1474,10 @@ def main():
                 display_columns = []
                 if 'master_no' in results.columns:
                     display_columns.append('master_no')
+
+                # Amazon account
+                if 'amazon_account' in results.columns:
+                    display_columns.append('amazon_account')
 
                 # Önemli eBay kolonları
                 important_ebay_cols = ['ebay_order_number', 'ebay_buyer_name', 'ebay_item_title']
@@ -1451,13 +1520,13 @@ def main():
                     if st.download_button(
                             label="📄 Download as JSON",
                             data=json_data,
-                            file_name=f"matched_orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                            file_name=f"matched_orders_multi_account_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                             mime="application/json"
                     ):
                         st.success("✅ JSON file downloaded!")
 
                         # Session'dan tüm verileri sil
-                        keys_to_remove = ['ebay_df', 'amazon_df', 'match_results']
+                        keys_to_remove = ['ebay_df', 'amazon_files_data', 'match_results']
                         for key in keys_to_remove:
                             if key in st.session_state:
                                 del st.session_state[key]
@@ -1471,13 +1540,13 @@ def main():
                     if st.download_button(
                             label="📊 Download as CSV",
                             data=csv_data,
-                            file_name=f"matched_orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            file_name=f"matched_orders_multi_account_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                             mime="text/csv"
                     ):
                         st.success("✅ CSV file downloaded!")
 
                         # Session'dan tüm verileri sil
-                        keys_to_remove = ['ebay_df', 'amazon_df', 'match_results']
+                        keys_to_remove = ['ebay_df', 'amazon_files_data', 'match_results']
                         for key in keys_to_remove:
                             if key in st.session_state:
                                 del st.session_state[key]
@@ -1490,44 +1559,49 @@ def main():
 
     # Yardım bölümü
     st.markdown("---")
-    with st.expander("❓ Enhanced Address Extraction Help"):
+    with st.expander("❓ Multi-Amazon Account Support Help"):
         st.markdown("""
-        **🚀 Enhanced Amazon Format Support:**
+        **🚀 Enhanced Multi-Amazon Account Features:**
 
-        **✅ Supported Formats:**
-        - **New Format:** `shippingAddress` object with structured fields
-        - **Mixed Format:** String addresses within `shippingAddress`
-        - **Old Format:** Direct `ship_to` field (legacy compatibility)
+        **✅ File Naming Convention:**
+        - **buyer1_amazon.json** → Account: "buyer1"
+        - **seller3_orders.json** → Account: "seller3"  
+        - **mainaccount_data.json** → Account: "mainaccount"
 
-        **🔧 Address Extraction Features:**
-        - Automatic format detection
-        - Object/JSON parsing for new format
-        - Individual component extraction (name, address, city, state, zip)
-        - Proper address string building with newline separators
-        - Fallback methods for incomplete data
+        **🔧 Processing Logic:**
+        1. Upload multiple Amazon JSON files from different accounts
+        2. Each file gets account name from filename (before underscore)
+        3. All Amazon orders are combined with account information
+        4. Single eBay file matches against ALL Amazon orders
+        5. Results show which Amazon account each match came from
 
-        **💡 Matching Algorithm:**
-        - **Name matching:** Fuzzy matching against full address
-        - **Location matching:** City, state, and ZIP code verification
-        - **Product matching:** Title similarity using multiple algorithms
-        - **Date validation:** Ensures logical order timing
-        - **Weighted scoring:** Configurable importance for each factor
+        **💡 Benefits:**
+        - **One-click processing** instead of 5 separate matches
+        - **Account performance tracking** 
+        - **Unified profit analysis** across all accounts
+        - **No duplicate order ID conflicts** (handled automatically)
 
-        **📊 Quality Assurance:**
-        - Pre-matching address quality check
-        - Format detection and validation
-        - Real-time progress tracking
-        - Detailed error reporting
+        **📊 Results Include:**
+        - Individual match details with account source
+        - Account-based performance metrics  
+        - Combined profit analysis across all accounts
+        - ROI breakdown per Amazon account
 
-        **🎯 Tips for Best Results:**
-        - Check "Address Quality Check" before matching
-        - Use threshold 60-80% for balanced results
-        - Higher thresholds = more precise but fewer matches
-        - Lower thresholds = more matches but less precision
+        **🎯 Best Practices:**
+        - Name files clearly: `buyer1_amazon.json`, `buyer2_amazon.json`
+        - Ensure all files have consistent date ranges
+        - Use threshold 60-80% for balanced results across accounts
+        - Check account breakdown in results for validation
+
+        **⚠️ Important Notes:**
+        - Each Amazon account's order IDs remain unique
+        - Account information is preserved in database
+        - Results can be filtered by account in dashboard
+        - Supports both old and new Amazon export formats
         """)
 
     # Footer
-    st.caption("🔗 Order Matcher | Enhanced with smart address extraction for all Amazon formats")
+    st.caption("🔗 Order Matcher | Enhanced with Multi-Amazon Account Support")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,8 @@ from utils.pocketbase_client import get_all_data
 from utils.data_processor import (
     clean_dataframe, convert_date_columns, calculate_metrics,
     filter_columns_for_display, get_column_display_names,
-    format_money_columns, apply_date_filter
+    format_money_columns, apply_date_filter, apply_account_filter,
+    get_account_summary_stats, calculate_account_breakdown
 )
 
 
@@ -207,51 +208,69 @@ def main_dashboard_content():
         df, date_columns_converted = convert_date_columns(df)
 
         st.success(f"✅ {len(df)} records loaded")
+
+        # Account summary - YENİ EKLENEN
+        if 'amazon_account' in df.columns:
+            account_stats = get_account_summary_stats(df)
+            if account_stats:
+                st.info(
+                    f"📊 {account_stats['total_accounts']} Amazon accounts | Top performer: **{account_stats['top_profit_account']}** (${account_stats['top_profit_amount']:,.2f})")
+
     except Exception as e:
         st.error(f"❌ Data processing error: {str(e)}")
         st.stop()
 
-    # Business Metrics with integrated date filter
+    # Enhanced Filtering Section - UPDATED: Account filter dahil
+    st.subheader("🔍 Filters")
+
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
+
+    with col1:
+        # Date filter
+        if date_columns_converted:
+            date_filter_options = ["All Time"] + date_columns_converted
+            selected_date_filter = st.selectbox("📅 Date Filter:", date_filter_options)
+        else:
+            selected_date_filter = "All Time"
+
+    with col2:
+        # Account filter - YENİ EKLENEN
+        if 'amazon_account' in df.columns:
+            unique_accounts = ['All Accounts'] + sorted(df['amazon_account'].unique().tolist())
+            selected_account = st.selectbox("🏪 Account Filter:", unique_accounts)
+        else:
+            selected_account = "All Accounts"
+
+    # Date range selectors
+    if selected_date_filter != "All Time":
+        with col3:
+            start_date = st.date_input(
+                "From:",
+                value=df[selected_date_filter].min().date() if df[selected_date_filter].notna().any()
+                else datetime.now().date() - timedelta(days=30)
+            )
+        with col4:
+            end_date = st.date_input(
+                "To:",
+                value=df[selected_date_filter].max().date() if df[selected_date_filter].notna().any()
+                else datetime.now().date()
+            )
+
+        # Apply date filter
+        if start_date and end_date:
+            df_filtered = apply_date_filter(df, selected_date_filter, start_date, end_date)
+            if len(df_filtered) != len(df):
+                st.info(f"📅 Date filtered: {len(df_filtered)}/{len(df)} records")
+                df = df_filtered
+
+    # Apply account filter - YENİ EKLENEN
+    if selected_account != "All Accounts":
+        df = apply_account_filter(df, "specific_account", [selected_account])
+        st.info(f"🏪 Account filtered: {len(df)} records for **{selected_account}**")
+
+    # Business Metrics
     st.subheader("📈 Business Metrics")
 
-    # Date filter controls (integrated with business metrics)
-    if date_columns_converted:
-        col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
-
-        with col1:
-            # Date column selection
-            date_filter_options = ["All Time"] + date_columns_converted
-            selected_date_filter = st.selectbox("📅 Filter by:", date_filter_options)
-
-        # Show date range selectors only if a date column is selected
-        if selected_date_filter != "All Time":
-            with col2:
-                start_date = st.date_input(
-                    "From:",
-                    value=df[selected_date_filter].min().date() if df[selected_date_filter].notna().any()
-                    else datetime.now().date() - timedelta(days=30)
-                )
-            with col3:
-                end_date = st.date_input(
-                    "To:",
-                    value=df[selected_date_filter].max().date() if df[selected_date_filter].notna().any()
-                    else datetime.now().date()
-                )
-
-            # Apply date filter
-            if start_date and end_date:
-                df_filtered = apply_date_filter(df, selected_date_filter, start_date, end_date)
-
-                if len(df_filtered) != len(df):
-                    with col4:
-                        st.info(f"📊 Filtered: {len(df_filtered)}/{len(df)} records")
-                    df = df_filtered
-        else:
-            # Show total records when "All Time" is selected
-            with col2:
-                st.info(f"📊 Total: {len(df)} records")
-
-    # Calculate and display metrics
     try:
         metrics = calculate_metrics(df)
 
@@ -267,6 +286,28 @@ def main_dashboard_content():
         col1.metric("✅ Profitable Orders", metrics['profitable_orders'])
         col2.metric("❌ Loss Orders", metrics['loss_orders'])
         col3.metric("⚪ Breakeven", metrics['breakeven_orders'])
+
+        # Account breakdown - YENİ EKLENEN
+        if 'amazon_account' in df.columns and selected_account == "All Accounts":
+            st.markdown("#### 🏪 Account Performance")
+
+            account_breakdown = metrics.get('account_breakdown', {})
+            if account_breakdown:
+                # Create account comparison table
+                account_data = []
+                for account, acc_metrics in account_breakdown.items():
+                    account_data.append({
+                        'Account': account,
+                        'Orders': acc_metrics['total_orders'],
+                        'Profit ($)': f"${acc_metrics['total_profit']:,.2f}",
+                        'Avg Profit ($)': f"${acc_metrics['average_profit']:.2f}",
+                        'ROI (%)': f"{acc_metrics['roi']:.1f}%",
+                        'Success Rate (%)': f"{acc_metrics['success_rate']:.1f}%"
+                    })
+
+                account_df = pd.DataFrame(account_data)
+                st.dataframe(account_df, use_container_width=True, hide_index=True)
+
     except Exception as e:
         st.error(f"❌ Metrics calculation error: {str(e)}")
 
@@ -428,16 +469,9 @@ def main_dashboard_content():
                     st.success(f"Applied {template_name} template!")
                     st.rerun()
 
-    # Debug info (can be removed later)
-    if st.sidebar.checkbox("🔧 Debug Mode"):
-        st.sidebar.write("**Session State Debug:**")
-        st.sidebar.write(f"Current Month: {current_month_key}")
-        st.sidebar.write("All Expenses:")
-        st.sidebar.json(st.session_state.monthly_expenses)
-
     # =================== TOP PRODUCTS & DATA TABLE ===================
 
-    # En iyi ürünler
+    # En iyi ürünler - UPDATED: Account breakdown dahil
     product_columns = [col for col in df.columns if any(keyword in col.lower()
                                                         for keyword in ['title', 'product', 'item', 'asin'])]
 
@@ -446,30 +480,49 @@ def main_dashboard_content():
     if product_columns and profit_columns:
         st.subheader("🏆 Top Products")
 
-        product_col = st.selectbox("Select product column:", product_columns)
-        profit_col = st.selectbox("Select profit column:", profit_columns)
+        col1, col2 = st.columns(2)
+
+        with col1:
+            product_col = st.selectbox("Select product column:", product_columns)
+
+        with col2:
+            profit_col = st.selectbox("Select profit column:", profit_columns)
 
         if product_col in df.columns and profit_col in df.columns:
             try:
-                top_products = df.groupby(product_col)[profit_col].agg(['sum', 'count', 'mean']).round(2)
-                top_products.columns = ['Total Profit', 'Order Count', 'Average Profit']
-                top_products = top_products.sort_values('Total Profit', ascending=False).head(10)
+                # Group by product and optionally by account
+                if 'amazon_account' in df.columns and selected_account == "All Accounts":
+                    # Show account breakdown for top products
+                    top_products = df.groupby([product_col, 'amazon_account'])[profit_col].agg(
+                        ['sum', 'count', 'mean']).round(2)
+                    top_products.columns = ['Total Profit', 'Order Count', 'Average Profit']
+                    top_products = top_products.sort_values('Total Profit', ascending=False).head(15)
+                else:
+                    # Standard top products view
+                    top_products = df.groupby(product_col)[profit_col].agg(['sum', 'count', 'mean']).round(2)
+                    top_products.columns = ['Total Profit', 'Order Count', 'Average Profit']
+                    top_products = top_products.sort_values('Total Profit', ascending=False).head(10)
 
                 st.dataframe(top_products, use_container_width=True)
             except Exception as e:
                 st.warning(f"⚠️ Top products error: {str(e)}")
 
-    # Ham veri tablosu
+    # Ham veri tablosu - UPDATED: Account column dahil
     st.subheader("📋 Data Table")
 
     try:
         display_columns = filter_columns_for_display(df)
         column_names = get_column_display_names(display_columns)
 
+        # Amazon account'u priority'de göster
+        default_columns = display_columns[:12] if len(display_columns) > 12 else display_columns
+        if 'amazon_account' in display_columns and 'amazon_account' not in default_columns:
+            default_columns.insert(1, 'amazon_account')  # 2. sıraya ekle
+
         selected_columns = st.multiselect(
             "Select columns to display:",
             options=display_columns,
-            default=display_columns[:10] if len(display_columns) > 10 else display_columns,
+            default=default_columns,
             format_func=lambda x: column_names.get(x, x)
         )
 
@@ -504,6 +557,19 @@ def main_dashboard_content():
 
     except Exception as e:
         st.error(f"❌ Table display error: {str(e)}")
+
+    # Debug info (can be removed later) - UPDATED: Account info dahil
+    if st.sidebar.checkbox("🔧 Debug Mode"):
+        st.sidebar.write("**Session State Debug:**")
+        st.sidebar.write(f"Current Month: {current_month_key}")
+        st.sidebar.write("All Expenses:")
+        st.sidebar.json(st.session_state.monthly_expenses)
+
+        if 'amazon_account' in df.columns:
+            st.sidebar.write("**Account Info:**")
+            st.sidebar.write(f"Selected Account: {selected_account}")
+            st.sidebar.write(f"Unique Accounts: {df['amazon_account'].nunique()}")
+            st.sidebar.write(f"Account List: {df['amazon_account'].unique().tolist()}")
 
     # Footer
     st.markdown("---")

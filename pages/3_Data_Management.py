@@ -10,7 +10,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.pocketbase_client import (
     get_all_data, bulk_upload_records, test_pocketbase_connection,
     get_record_count, delete_record, test_single_record_upload,
-    get_collection_schema
+    get_collection_schema, get_records_by_account, get_account_summary,
+    delete_records_by_account
 )
 
 # Sayfa konfigürasyonu
@@ -58,10 +59,32 @@ with tab1:
 
             st.success(f"✅ JSON file loaded with {len(json_data)} orders")
 
+            # Amazon account analysis - YENİ EKLENEN
+            if json_data and 'amazon_account' in json_data[0]:
+                df_preview = pd.DataFrame(json_data)
+                account_counts = df_preview['amazon_account'].value_counts()
+
+                st.info("📊 **Account Breakdown in Upload:**")
+                col1, col2, col3 = st.columns(3)
+                for i, (account, count) in enumerate(account_counts.head(3).items()):
+                    with [col1, col2, col3][i % 3]:
+                        st.metric(f"Account: {account}", f"{count} orders")
+
+                if len(account_counts) > 3:
+                    with st.expander(f"View all {len(account_counts)} accounts"):
+                        for account, count in account_counts.items():
+                            st.write(f"• **{account}**: {count} orders")
+
             # Önizleme
             with st.expander("🔍 Data Preview"):
                 if len(json_data) > 0:
-                    st.json(json_data[0])  # İlk kaydı göster
+                    sample_record = json_data[0]
+
+                    # Amazon account vurgusu
+                    if 'amazon_account' in sample_record:
+                        st.write(f"**Sample Account:** {sample_record['amazon_account']}")
+
+                    st.json(sample_record)  # İlk kaydı göster
 
             # Upload butonu
             col1, col2, col3 = st.columns([1, 2, 1])
@@ -120,15 +143,28 @@ with tab1:
 with tab2:
     st.subheader("📊 View Data")
 
-    col1, col2 = st.columns([3, 1])
+    col1, col2, col3 = st.columns([2, 1, 1])
 
     with col1:
-        st.info(f"📊 Total records in database: {get_record_count()}")
+        total_records = get_record_count()
+        st.info(f"📊 Total records in database: {total_records}")
 
     with col2:
         if st.button("🔄 Refresh Data"):
             st.cache_data.clear()
             st.rerun()
+
+    with col3:
+        # Account summary button - YENİ EKLENEN
+        if st.button("🏪 Account Summary"):
+            try:
+                account_summary = get_account_summary()
+                if account_summary:
+                    st.json(account_summary)
+                else:
+                    st.info("No account data available")
+            except Exception as e:
+                st.error(f"Error getting account summary: {e}")
 
     # Veri yükleme
     try:
@@ -137,12 +173,52 @@ with tab2:
         if data:
             df = pd.DataFrame(data)
 
+            # Account filtering - YENİ EKLENEN
+            account_filter_enabled = False
+            if 'amazon_account' in df.columns:
+                st.markdown("#### 🏪 Account Filtering")
+                col1, col2 = st.columns([2, 1])
+
+                with col1:
+                    unique_accounts = ['All Accounts'] + sorted(df['amazon_account'].unique().tolist())
+                    selected_account = st.selectbox("Filter by Account:", unique_accounts)
+
+                    if selected_account != "All Accounts":
+                        df = df[df['amazon_account'] == selected_account]
+                        account_filter_enabled = True
+                        st.info(f"📊 Showing {len(df)} records for account: **{selected_account}**")
+
+                with col2:
+                    if st.button("📈 Show Account Stats"):
+                        if selected_account != "All Accounts":
+                            account_data = df[df['amazon_account'] == selected_account]
+                        else:
+                            account_data = df
+
+                        if 'calculated_profit_usd' in account_data.columns:
+                            total_profit = account_data['calculated_profit_usd'].sum()
+                            avg_profit = account_data['calculated_profit_usd'].mean()
+                            profitable_orders = (account_data['calculated_profit_usd'] > 0).sum()
+
+                            col_a, col_b, col_c = st.columns(3)
+                            with col_a:
+                                st.metric("Total Profit", f"${total_profit:,.2f}")
+                            with col_b:
+                                st.metric("Avg Profit", f"${avg_profit:.2f}")
+                            with col_c:
+                                st.metric("Profitable Orders", profitable_orders)
+
             # Kolon seçimi
             if len(df.columns) > 10:
+                # Amazon account'u default'ta dahil et
+                default_columns = df.columns.tolist()[:10]
+                if 'amazon_account' in df.columns and 'amazon_account' not in default_columns:
+                    default_columns.insert(1, 'amazon_account')  # 2. sıraya ekle
+
                 selected_columns = st.multiselect(
                     "Select columns to display:",
                     options=df.columns.tolist(),
-                    default=df.columns.tolist()[:10]
+                    default=default_columns
                 )
             else:
                 selected_columns = df.columns.tolist()
@@ -166,22 +242,33 @@ with tab2:
 
                     df_display = df[selected_columns].iloc[start_idx:end_idx]
 
-                    st.info(f"Showing records {start_idx + 1}-{min(end_idx, len(df))} of {len(df)}")
+                    display_info = f"📄 Page {page}/{total_pages} - Records {start_idx + 1}-{min(end_idx, len(df))} / {len(df)}"
+                    if account_filter_enabled:
+                        display_info += f" (filtered for {selected_account})"
+                    st.info(display_info)
                 else:
                     df_display = df[selected_columns]
 
                 # Tabloyu göster
                 st.dataframe(df_display, use_container_width=True)
 
-                # İndirme seçenekleri
+                # İndirme seçenekleri - UPDATED: Account info dahil filename
+                st.markdown("#### 💾 Download Options")
                 col1, col2 = st.columns(2)
+
+                # Filename generation
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                if account_filter_enabled:
+                    base_filename = f"matched_orders_{selected_account}_{timestamp}"
+                else:
+                    base_filename = f"matched_orders_all_accounts_{timestamp}"
 
                 with col1:
                     json_data = df.to_json(orient='records', indent=2)
                     st.download_button(
                         label="📄 Download as JSON",
                         data=json_data,
-                        file_name=f"matched_orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        file_name=f"{base_filename}.json",
                         mime="application/json"
                     )
 
@@ -190,7 +277,7 @@ with tab2:
                     st.download_button(
                         label="📊 Download as CSV",
                         data=csv_data,
-                        file_name=f"matched_orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        file_name=f"{base_filename}.csv",
                         mime="text/csv"
                     )
 
@@ -213,6 +300,57 @@ with tab3:
         if data:
             df = pd.DataFrame(data)
 
+            # Account-based deletion options - YENİ EKLENEN
+            if 'amazon_account' in df.columns:
+                st.markdown("#### 🏪 Delete by Account")
+
+                account_counts = df['amazon_account'].value_counts()
+                st.write("**Available Accounts:**")
+
+                for account, count in account_counts.items():
+                    col1, col2, col3 = st.columns([2, 1, 1])
+
+                    with col1:
+                        st.write(f"**{account}**: {count} records")
+
+                    with col2:
+                        if st.button(f"View {account}", key=f"view_{account}"):
+                            account_records = get_records_by_account(account, limit=5)
+                            if account_records:
+                                st.write(f"**Sample records from {account}:**")
+                                for i, record in enumerate(account_records[:3]):
+                                    st.write(f"{i + 1}. Order ID: {record.get('amazon_orderid', 'N/A')}")
+
+                    with col3:
+                        if st.button(f"🗑️ Delete {account}", key=f"delete_{account}", type="secondary"):
+                            st.session_state[f"confirm_delete_{account}"] = True
+
+                    # Confirmation dialog
+                    if st.session_state.get(f"confirm_delete_{account}", False):
+                        st.error(f"⚠️ Are you sure you want to delete ALL {count} records from account '{account}'?")
+
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            if st.button(f"✅ Yes, Delete {account}", key=f"confirm_yes_{account}", type="primary"):
+                                with st.spinner(f"Deleting records from {account}..."):
+                                    deleted_count, error_count = delete_records_by_account(account)
+
+                                if deleted_count > 0:
+                                    st.success(f"✅ Deleted {deleted_count} records from {account}")
+                                    st.cache_data.clear()
+                                    del st.session_state[f"confirm_delete_{account}"]
+                                    st.rerun()
+
+                                if error_count > 0:
+                                    st.error(f"❌ {error_count} records could not be deleted")
+
+                        with col_b:
+                            if st.button(f"❌ Cancel", key=f"confirm_no_{account}"):
+                                del st.session_state[f"confirm_delete_{account}"]
+                                st.rerun()
+
+                st.markdown("---")
+
             # Silme seçenekleri
             delete_option = st.radio(
                 "Select delete option:",
@@ -224,10 +362,32 @@ with tab3:
                 master_nos = df['master_no'].tolist() if 'master_no' in df.columns else []
 
                 if master_nos:
-                    selected_master_nos = st.multiselect(
-                        "Select records to delete (by master_no):",
-                        options=master_nos
-                    )
+                    # Account info ile birlikte göster
+                    if 'amazon_account' in df.columns:
+                        master_options = []
+                        for _, row in df.iterrows():
+                            master_no = row.get('master_no', 'N/A')
+                            account = row.get('amazon_account', 'N/A')
+                            amazon_orderid = row.get('amazon_orderid', 'N/A')
+                            display_text = f"Master #{master_no} - Account: {account} - Order: {amazon_orderid}"
+                            master_options.append((master_no, display_text))
+
+                        selected_display = st.multiselect(
+                            "Select records to delete:",
+                            options=[display for _, display in master_options]
+                        )
+
+                        # Extract master_nos from selected displays
+                        selected_master_nos = []
+                        for master_no, display in master_options:
+                            if display in selected_display:
+                                selected_master_nos.append(master_no)
+                    else:
+                        # Fallback - sadece master no
+                        selected_master_nos = st.multiselect(
+                            "Select records to delete (by master_no):",
+                            options=master_nos
+                        )
 
                     if selected_master_nos:
                         if st.button("🗑️ Delete Selected Records", type="primary"):
@@ -306,6 +466,16 @@ with tab4:
 
                     if schema:
                         st.success("✅ Schema retrieved!")
+
+                        # Amazon account field kontrolü - YENİ EKLENEN
+                        schema_fields = schema.get('schema', [])
+                        has_amazon_account = any(field.get('name') == 'amazon_account' for field in schema_fields)
+
+                        if has_amazon_account:
+                            st.success("✅ amazon_account field found in schema")
+                        else:
+                            st.error("❌ amazon_account field NOT found in schema - Please add it!")
+
                         st.json(schema)
                     else:
                         st.error("❌ Could not get schema")
@@ -320,21 +490,54 @@ with tab4:
 
                     if success:
                         st.success("✅ Test record uploaded successfully!")
+                        st.info("✅ Composite key validation (orderid + account) also works!")
                     else:
                         st.error("❌ Test record upload failed - check console for details")
                 except Exception as e:
                     st.error(f"❌ Test upload error: {e}")
 
+    # Account debugging tools - YENİ BÖLÜM
+    st.markdown("#### 🏪 Account Debug Tools")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("📊 Account Summary Debug", use_container_width=True):
+            try:
+                account_summary = get_account_summary()
+                if account_summary:
+                    st.success("✅ Account summary retrieved!")
+                    st.json(account_summary)
+                else:
+                    st.warning("⚠️ No account summary available")
+            except Exception as e:
+                st.error(f"❌ Account summary error: {e}")
+
+    with col2:
+        test_account = st.text_input("Test Account Name:", placeholder="e.g., buyer1")
+        if st.button("🔍 Test Account Records", use_container_width=True) and test_account:
+            try:
+                records = get_records_by_account(test_account, limit=5)
+                if records:
+                    st.success(f"✅ Found {len(records)} records for {test_account}")
+                    for i, record in enumerate(records):
+                        st.write(f"{i + 1}. Order: {record.get('amazon_orderid', 'N/A')}")
+                else:
+                    st.warning(f"⚠️ No records found for account: {test_account}")
+            except Exception as e:
+                st.error(f"❌ Account test error: {e}")
+
     # Show recent logs
     if st.button("📋 Show Debug Output", use_container_width=True):
         st.info("💡 Check your terminal/console where Streamlit is running for detailed debug output!")
 
-        # Sample debug output display
+        # Sample debug output display - UPDATED: Account info dahil
         with st.expander("Expected Debug Output Example"):
             st.code("""
-DEBUG - Uploading record with keys: ['master_no', 'ebay_order_number', ...]
+DEBUG - Uploading record with keys: ['master_no', 'ebay_order_number', 'amazon_account', ...]
+DEBUG - Composite key search: orderid=123-456-789, account=buyer1
 DEBUG - Response status: 400
-DEBUG - Field errors: {'amazon_product_title': {'code': 'validation_invalid_value', 'message': 'Field is too long'}}
+DEBUG - Field errors: {'amazon_account': {'code': 'validation_invalid_value', 'message': 'Field is required'}}
             """)
 
     # Show current PocketBase connection status
@@ -351,4 +554,4 @@ DEBUG - Field errors: {'amazon_product_title': {'code': 'validation_invalid_valu
 
 # Footer
 st.markdown("---")
-st.caption("📁 Data Management | Manage your order matching data")
+st.caption("📁 Data Management | Enhanced with Amazon Account Support")
