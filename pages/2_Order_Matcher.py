@@ -1396,16 +1396,20 @@ def main():
                                         f"💰 Total Profit: ${total_profit:,.2f} | ✅ Profitable Orders: {profitable_count}")
 
                                     if zero_cost_count > 0:
-                                        return_detected_count = len(
-                                            results[results['cost_calculation_method'] == 'return_detected_cost_zero'])
-                                        actual_failures = zero_cost_count - return_detected_count
+                                        if 'cost_calculation_method' in results.columns:
+                                            return_detected_count = len(results[results[
+                                                                                    'cost_calculation_method'] == 'return_detected_cost_zero'])
+                                            actual_failures = zero_cost_count - return_detected_count
 
-                                        if return_detected_count > 0:
-                                            st.info(
-                                                f"ℹ️ {return_detected_count} orders have $0 cost due to returns/refunds")
-                                        if actual_failures > 0:
+                                            if return_detected_count > 0:
+                                                st.info(
+                                                    f"ℹ️ {return_detected_count} orders have $0 cost due to returns/refunds")
+                                            if actual_failures > 0:
+                                                st.warning(
+                                                    f"⚠️ {actual_failures} orders have $0 Amazon cost (calculation failed)")
+                                        else:
                                             st.warning(
-                                                f"⚠️ {actual_failures} orders have $0 Amazon cost (calculation failed)")
+                                                f"⚠️ {zero_cost_count} orders have $0 Amazon cost (calculation failed)")
 
                             else:
                                 st.warning("⚠️ No matches found. Try lowering the threshold value.")
