@@ -645,14 +645,9 @@ class DropshippingMatcher:
                         continue
 
             # YENİ EKLEME: Return Detection - Amazon iade kontrolü
-            # Önce tüm amazon field'larını görelim
-            st.write("🔍 **All Amazon Fields:**")
-            amazon_fields = {k: v for k, v in amazon_data.items() if 'status' in k.lower() or 'deliver' in k.lower()}
-            for field, value in amazon_fields.items():
-                st.write(f"  • {field}: '{value}'")
-
             # Multiple field names deneyelim
             possible_fields = [
+                'deliveryStatus',  # ← GERÇEK FIELD İSMİ!
                 'amazon_deliverystatus',
                 'amazon_delivery_status',
                 'amazon_status',
@@ -674,7 +669,7 @@ class DropshippingMatcher:
             return_keywords = ['return', 'returned', 'refund', 'cancelled']
             is_returned = any(keyword in delivery_status for keyword in return_keywords)
 
-            # FORCE DEBUG - Her zaman yazdır
+            # DEBUG
             st.write(f"🔍 DEBUG - Found Field: '{found_field}'")
             st.write(f"🔍 DEBUG - Raw Status: '{delivery_status_raw}'")
             st.write(f"🔍 DEBUG - Cleaned Status: '{delivery_status}'")
