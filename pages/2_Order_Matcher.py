@@ -645,12 +645,14 @@ class DropshippingMatcher:
                         continue
 
             # YENİ EKLEME: Return Detection - Amazon iade kontrolü
-            delivery_status = amazon_data.get('amazon_deliverystatus', '').lower()
-            return_keywords = ['return', 'returned', 'refund', 'cancelled', 'return complete']
+            delivery_status = amazon_data.get('amazon_deliverystatus', '').strip().lower()
+            return_keywords = ['return', 'returned', 'refund', 'cancelled']
             is_returned = any(keyword in delivery_status for keyword in return_keywords)
 
-            print(f"DEBUG - Delivery Status: '{amazon_data.get('amazon_deliverystatus', 'N/A')}'")
-            print(f"DEBUG - Return Detected: {is_returned}")
+            print(f"DEBUG - Raw Status: '{amazon_data.get('amazon_deliverystatus', 'NOT_FOUND')}'")
+            print(f"DEBUG - Cleaned Status: '{delivery_status}'")
+            print(f"DEBUG - Return Keywords: {return_keywords}")
+            print(f"DEBUG - Is Returned: {is_returned}")
 
             # Amazon maliyeti hesaplama - Return detection öncelikli
             amazon_cost_usd = 0.0
