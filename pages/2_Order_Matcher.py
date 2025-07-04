@@ -644,7 +644,7 @@ class DropshippingMatcher:
                     except (ValueError, TypeError):
                         continue
 
-            # YENİ EKLEME: Return Detection - Amazon iade kontrolü
+            # Return Detection - Amazon iade kontrolü
             possible_fields = [
                 'deliveryStatus',  # Gerçek field ismi
                 'amazon_deliverystatus',
@@ -656,12 +656,9 @@ class DropshippingMatcher:
             ]
 
             delivery_status_raw = ''
-            found_field = None
-
             for field in possible_fields:
                 if field in amazon_data and amazon_data[field]:
                     delivery_status_raw = amazon_data[field]
-                    found_field = field
                     break
 
             delivery_status = str(delivery_status_raw).strip().lower()
@@ -683,7 +680,7 @@ class DropshippingMatcher:
                 order_total = amazon_data.get('orderTotal') or amazon_data.get('grand_total', '')
 
                 # PRIORITY 1: USD Direct
-                if order_total and 'USD' in str(order_total):
+                if order_total and ('USD' in str(order_total) or '$' in str(order_total)):
                     usd_amount = self.parse_usd_amount(str(order_total))
                     if usd_amount > 0:
                         amazon_cost_usd = usd_amount
@@ -1398,10 +1395,17 @@ def main():
                                     st.info(
                                         f"💰 Total Profit: ${total_profit:,.2f} | ✅ Profitable Orders: {profitable_count}")
 
-                                    # Cost calculation warnings
                                     if zero_cost_count > 0:
-                                        st.warning(
-                                            f"⚠️ {zero_cost_count} orders have $0 Amazon cost (calculation failed)")
+                                        return_detected_count = len(
+                                            results[results['cost_calculation_method'] == 'return_detected_cost_zero'])
+                                        actual_failures = zero_cost_count - return_detected_count
+
+                                        if return_detected_count > 0:
+                                            st.info(
+                                                f"ℹ️ {return_detected_count} orders have $0 cost due to returns/refunds")
+                                        if actual_failures > 0:
+                                            st.warning(
+                                                f"⚠️ {actual_failures} orders have $0 Amazon cost (calculation failed)")
 
                             else:
                                 st.warning("⚠️ No matches found. Try lowering the threshold value.")
