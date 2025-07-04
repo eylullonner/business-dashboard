@@ -623,7 +623,7 @@ class DropshippingMatcher:
     # TRY → USD çevirim - Embedded rate olmadan (4 yöntem)
 
     def calculate_profit_metrics(self, ebay_data: Dict, amazon_data: Dict) -> Dict:
-        """Kâr metriklerini hesapla - ROI dahil + Gerçek kur bilgisi"""
+        """Kâr metriklerini hesapla - ROI dahil + Gerçek kur bilgisi + Return Detection"""
         try:
             # Exchange rate handler'ı import et (opsiyonel)
             try:
@@ -644,61 +644,76 @@ class DropshippingMatcher:
                     except (ValueError, TypeError):
                         continue
 
-            # Amazon maliyeti hesaplama - 4 YÖNTEMLİ + KUR BİLGİSİ
+            # YENİ EKLEME: Return Detection - Amazon iade kontrolü
+            delivery_status = amazon_data.get('amazon_deliverystatus', '').lower()
+            return_keywords = ['return', 'returned', 'refund', 'cancelled', 'return complete']
+            is_returned = any(keyword in delivery_status for keyword in return_keywords)
+
+            print(f"DEBUG - Delivery Status: '{amazon_data.get('amazon_deliverystatus', 'N/A')}'")
+            print(f"DEBUG - Return Detected: {is_returned}")
+
+            # Amazon maliyeti hesaplama - Return detection öncelikli
             amazon_cost_usd = 0.0
             cost_calculation_method = "unknown"
             actual_exchange_rate = None
 
-            order_total = amazon_data.get('orderTotal') or amazon_data.get('grand_total', '')
+            if is_returned:
+                # Ürün iade edilmişse cost = 0
+                amazon_cost_usd = 0.0
+                cost_calculation_method = "return_detected_cost_zero"
+                print(f"DEBUG - Return detected, amazon_cost set to 0")
+            else:
+                # Normal cost calculation - 4 YÖNTEMLİ + KUR BİLGİSİ
+                order_total = amazon_data.get('orderTotal') or amazon_data.get('grand_total', '')
 
-            # PRIORITY 1: USD Direct
-            if order_total and 'USD' in str(order_total):
-                usd_amount = self.parse_usd_amount(str(order_total))
-                if usd_amount > 0:
-                    amazon_cost_usd = usd_amount
-                    cost_calculation_method = "usd_direct_no_conversion"
+                # PRIORITY 1: USD Direct
+                if order_total and 'USD' in str(order_total):
+                    usd_amount = self.parse_usd_amount(str(order_total))
+                    if usd_amount > 0:
+                        amazon_cost_usd = usd_amount
+                        cost_calculation_method = "usd_direct_no_conversion"
 
-            # PRIORITY 2: TRY + API (KUR BİLGİSİ ALMA)
-            elif order_total and 'TRY' in str(order_total) and rate_handler:
-                order_date = amazon_data.get('orderDate') or amazon_data.get('order_date', '')
+                # PRIORITY 2: TRY + API (KUR BİLGİSİ ALMA)
+                elif order_total and 'TRY' in str(order_total) and rate_handler:
+                    order_date = amazon_data.get('orderDate') or amazon_data.get('order_date', '')
 
-                if order_date:
-                    success, calculated_cost, calc_message = rate_handler.calculate_amazon_cost_usd(
-                        order_total, order_date
-                    )
+                    if order_date:
+                        success, calculated_cost, calc_message = rate_handler.calculate_amazon_cost_usd(
+                            order_total, order_date
+                        )
 
-                    if success:
-                        amazon_cost_usd = calculated_cost
+                        if success:
+                            amazon_cost_usd = calculated_cost
 
-                        # GERÇEK KUR BİLGİSİNİ AL
-                        try_amount = self.parse_usd_amount(order_total)  # TRY miktarı
-                        if try_amount > 0 and calculated_cost > 0:
-                            actual_exchange_rate = round(try_amount / calculated_cost, 2)
-                            cost_calculation_method = f"api_rate_{actual_exchange_rate}_try_per_usd"
-                        else:
-                            cost_calculation_method = "api_conversion_success"
+                            # GERÇEK KUR BİLGİSİNİ AL
+                            try_amount = self.parse_usd_amount(order_total)  # TRY miktarı
+                            if try_amount > 0 and calculated_cost > 0:
+                                actual_exchange_rate = round(try_amount / calculated_cost, 2)
+                                cost_calculation_method = f"api_rate_{actual_exchange_rate}_try_per_usd"
+                            else:
+                                cost_calculation_method = "api_conversion_success"
 
-            # PRIORITY 3: Existing USD Field
-            if amazon_cost_usd == 0.0:  # Yukarıdakiler başarısızsa
-                for field in ['amazon_cost_usd', 'Amazon cost USD', 'cost_usd', 'usd_cost']:
-                    if field in amazon_data and pd.notna(amazon_data[field]):
-                        amazon_cost_str = str(amazon_data[field])
-                        if amazon_cost_str and amazon_cost_str != 'Not available':
-                            parsed_usd = self.parse_usd_amount(amazon_cost_str)
-                            if parsed_usd > 0:
-                                amazon_cost_usd = parsed_usd
-                                cost_calculation_method = "existing_usd_field"
-                                break
+                # PRIORITY 3: Existing USD Field
+                if amazon_cost_usd == 0.0:  # Yukarıdakiler başarısızsa
+                    for field in ['amazon_cost_usd', 'Amazon cost USD', 'cost_usd', 'usd_cost']:
+                        if field in amazon_data and pd.notna(amazon_data[field]):
+                            amazon_cost_str = str(amazon_data[field])
+                            if amazon_cost_str and amazon_cost_str != 'Not available':
+                                parsed_usd = self.parse_usd_amount(amazon_cost_str)
+                                if parsed_usd > 0:
+                                    amazon_cost_usd = parsed_usd
+                                    cost_calculation_method = "existing_usd_field"
+                                    break
 
-            # PRIORITY 4: Sabit Kur Fallback (KUR BİLGİSİ)
-            if amazon_cost_usd == 0.0 and order_total and 'TRY' in str(order_total):
-                try_amount = self.parse_usd_amount(order_total)  # TRY parse eder
-                if try_amount > 0:
-                    # Sabit kur kullan (güncel TRY/USD ~34)
-                    FALLBACK_RATE = 34.0  # 1 USD = 34 TRY
-                    amazon_cost_usd = try_amount / FALLBACK_RATE
-                    actual_exchange_rate = FALLBACK_RATE
-                    cost_calculation_method = f"fallback_rate_{FALLBACK_RATE}_try_per_usd"
+                # PRIORITY 4: Sabit Kur Fallback (KUR BİLGİSİ)
+                if amazon_cost_usd == 0.0 and order_total and 'TRY' in str(order_total):
+                    try_amount = self.parse_usd_amount(order_total)  # TRY parse eder
+                    if try_amount > 0:
+                        # Sabit kur kullan (güncel TRY/USD ~34)
+                        FALLBACK_RATE = 34.0  # 1 USD = 34 TRY
+                        amazon_cost_usd = try_amount / FALLBACK_RATE
+                        actual_exchange_rate = FALLBACK_RATE
+                        cost_calculation_method = f"fallback_rate_{FALLBACK_RATE}_try_per_usd"
 
             # Hesaplamalar
             profit_usd = ebay_earning - amazon_cost_usd
