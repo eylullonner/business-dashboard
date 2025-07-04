@@ -645,9 +645,8 @@ class DropshippingMatcher:
                         continue
 
             # YENİ EKLEME: Return Detection - Amazon iade kontrolü
-            # Multiple field names deneyelim
             possible_fields = [
-                'deliveryStatus',  # ← GERÇEK FIELD İSMİ!
+                'deliveryStatus',  # Gerçek field ismi
                 'amazon_deliverystatus',
                 'amazon_delivery_status',
                 'amazon_status',
@@ -668,12 +667,6 @@ class DropshippingMatcher:
             delivery_status = str(delivery_status_raw).strip().lower()
             return_keywords = ['return', 'returned', 'refund', 'cancelled']
             is_returned = any(keyword in delivery_status for keyword in return_keywords)
-
-            # DEBUG
-            st.write(f"🔍 DEBUG - Found Field: '{found_field}'")
-            st.write(f"🔍 DEBUG - Raw Status: '{delivery_status_raw}'")
-            st.write(f"🔍 DEBUG - Cleaned Status: '{delivery_status}'")
-            st.write(f"🔍 DEBUG - Is Returned: {is_returned}")
 
             # Amazon maliyeti hesaplama - Return detection öncelikli
             amazon_cost_usd = 0.0
