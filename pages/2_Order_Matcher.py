@@ -645,18 +645,40 @@ class DropshippingMatcher:
                         continue
 
             # YENİ EKLEME: Return Detection - Amazon iade kontrolü
-            delivery_status_raw = amazon_data.get('amazon_deliverystatus', '')
+            # Önce tüm amazon field'larını görelim
+            st.write("🔍 **All Amazon Fields:**")
+            amazon_fields = {k: v for k, v in amazon_data.items() if 'status' in k.lower() or 'deliver' in k.lower()}
+            for field, value in amazon_fields.items():
+                st.write(f"  • {field}: '{value}'")
+
+            # Multiple field names deneyelim
+            possible_fields = [
+                'amazon_deliverystatus',
+                'amazon_delivery_status',
+                'amazon_status',
+                'deliverystatus',
+                'delivery_status',
+                'status'
+            ]
+
+            delivery_status_raw = ''
+            found_field = None
+
+            for field in possible_fields:
+                if field in amazon_data and amazon_data[field]:
+                    delivery_status_raw = amazon_data[field]
+                    found_field = field
+                    break
+
             delivery_status = str(delivery_status_raw).strip().lower()
             return_keywords = ['return', 'returned', 'refund', 'cancelled']
             is_returned = any(keyword in delivery_status for keyword in return_keywords)
 
             # FORCE DEBUG - Her zaman yazdır
+            st.write(f"🔍 DEBUG - Found Field: '{found_field}'")
             st.write(f"🔍 DEBUG - Raw Status: '{delivery_status_raw}'")
             st.write(f"🔍 DEBUG - Cleaned Status: '{delivery_status}'")
             st.write(f"🔍 DEBUG - Is Returned: {is_returned}")
-            print(f"CONSOLE DEBUG - Raw Status: '{delivery_status_raw}'")
-            print(f"CONSOLE DEBUG - Cleaned Status: '{delivery_status}'")
-            print(f"CONSOLE DEBUG - Is Returned: {is_returned}")
 
             # Amazon maliyeti hesaplama - Return detection öncelikli
             amazon_cost_usd = 0.0
