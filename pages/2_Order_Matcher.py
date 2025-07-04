@@ -662,7 +662,7 @@ class DropshippingMatcher:
                     break
 
             delivery_status = str(delivery_status_raw).strip().lower()
-            return_keywords = ['returned', 'refunded', 'refund' 'cancelled', 'return complete']
+            return_keywords = ['returned', 'refunded', 'refund', 'cancelled', 'return complete']
             is_returned = any(keyword in delivery_status for keyword in return_keywords)
 
             # Amazon maliyeti hesaplama - Return detection öncelikli
