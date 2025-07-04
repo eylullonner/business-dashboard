@@ -33,23 +33,24 @@ NUMERIC_FIELDS = [
 COLUMN_DISPLAY_NAMES = {
     'master_no': 'Master No',
     'amazon_account': 'Amazon Account',  # YENİ EKLENEN
-    'ebay_item_title': 'eBay Product',
-    'amazon_item_title': 'Amazon Product',
-    'amazon_product_title': 'Amazon Product',  # Alternative field name
+    'ebay_item_title': 'eBay Product Title',
+    'amazon_item_title': 'Amazon Product Title',
+    'amazon_product_title': 'Amazon Product Title',  # Alternative field name
     'calculated_profit_usd': 'Profit ($)',
     'calculated_amazon_cost_usd': 'Amazon Cost ($)',
-    'calculated_ebay_earning_usd': 'eBay Revenue ($)',
-    'ebay_order_number': 'eBay Order',
-    'amazon_order_number': 'Amazon Order',
+    'calculated_ebay_earning_usd': 'eBay Earnings ($)',
+    'ebay_order_number': 'eBay Order number',
+    'amazon_order_number': 'Amazon Order number',
     'amazon_orderid': 'Amazon Order ID',  # Alternative field name
-    'ebay_buyer_name': 'eBay Buyer',
+    'ebay_buyer_name': 'eBay Buyer name',
     'amazon_asin': 'Amazon ASIN',
     'amazon_product_url': 'Amazon URL',
     'amazon_ship_to': 'Amazon Ship To',
     'calculated_margin_percent': 'Margin (%)',
     'calculated_roi_percent': 'ROI (%)',
     'exchange_rate_used': 'Exchange Rate',
-    'cost_calculation_method': 'Cost Method'
+    'cost_calculation_method': 'Cost Method',
+    'amazon_deliverystatus' : 'Amazon Delivery Status'
 }
 
 # Gizlenecek kolonlar - UPDATED: Amazon account preserved
@@ -69,7 +70,8 @@ PRIORITY_DISPLAY_COLUMNS = [
     'calculated_ebay_earning_usd',
     'ebay_item_title',
     'amazon_product_title',
-    'amazon_asin'
+    'amazon_asin',
+    'amazon_deliverystatus'
 ]
 
 # Account related settings - YENİ BÖLÜM
