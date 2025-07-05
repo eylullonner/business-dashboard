@@ -794,6 +794,22 @@ class DropshippingMatcher:
         print(f"DEBUG - Combined total: {len(combined_df)} Amazon records from {len(amazon_files_data)} accounts")
         return combined_df
 
+    def combine_ebay_files(self, ebay_files_data: List[Tuple[str, pd.DataFrame]]) -> pd.DataFrame:
+        """Çoklu eBay dosyalarını birleştir ve source bilgisi ekle"""
+        combined_df = pd.DataFrame()
+
+        for filename, ebay_df in ebay_files_data:
+            # Source bilgisi ekle (opsiyonel)
+            ebay_df_copy = ebay_df.copy()
+            ebay_df_copy['ebay_source'] = filename
+
+            # Birleştir
+            combined_df = pd.concat([combined_df, ebay_df_copy], ignore_index=True)
+
+            print(f"DEBUG - Added {len(ebay_df)} eBay records from {filename}")
+
+        print(f"DEBUG - Combined total: {len(combined_df)} eBay records from {len(ebay_files_data)} files")
+        return combined_df
     def create_match_record(self, ebay_data: Dict, amazon_data: Dict,
                             match_details: Dict, match_counter: int,
                             exclude_fields: List[str] = None) -> Dict:
@@ -1075,47 +1091,61 @@ def main():
 
         with col1:
             st.markdown("#### 🏪 eBay Orders")
-            ebay_file = st.file_uploader(
-                "Select eBay JSON file",
+            ebay_files = st.file_uploader(
+                "Select eBay JSON files",
                 type=['json'],
                 key="ebay_upload",
-                help="Upload your order data exported from eBay"
+                help="Upload multiple eBay JSON files from different stores/periods",
+                accept_multiple_files=True
             )
 
-            if ebay_file:
+            if ebay_files:
                 try:
-                    ebay_data = json.loads(ebay_file.read())
+                    ebay_files_data = []
+                    total_ebay_orders = 0
 
-                    # JSON yapısını handle et
-                    if isinstance(ebay_data, list):
-                        ebay_df = pd.DataFrame(ebay_data)
-                    elif isinstance(ebay_data, dict):
-                        possible_keys = ['orders', 'data', 'results', 'items', 'orderDetails']
-                        ebay_orders = None
+                    st.success(f"✅ {len(ebay_files)} eBay files uploaded")
 
-                        for key in possible_keys:
-                            if key in ebay_data:
-                                ebay_orders = ebay_data[key]
-                                st.info(f"✅ eBay orders found in '{key}' field")
-                                break
+                    for ebay_file in ebay_files:
+                        ebay_data = json.loads(ebay_file.read())
 
-                        ebay_df = pd.DataFrame(ebay_orders if ebay_orders else [ebay_data])
-                    else:
-                        ebay_df = pd.DataFrame([ebay_data])
+                        # JSON yapısını handle et (aynı logic)
+                        if isinstance(ebay_data, list):
+                            ebay_df = pd.DataFrame(ebay_data)
+                        elif isinstance(ebay_data, dict):
+                            possible_keys = ['orders', 'data', 'results', 'items', 'orderDetails']
+                            ebay_orders = None
 
-                    st.success(f"✅ {len(ebay_df)} eBay orders loaded")
-                    st.session_state.ebay_df = ebay_df
+                            for key in possible_keys:
+                                if key in ebay_data:
+                                    ebay_orders = ebay_data[key]
+                                    st.info(f"✅ eBay orders found in '{key}' field")
+                                    break
 
-                    # Kolon önizlemesi
-                    with st.expander("🔍 eBay Columns"):
-                        st.write(f"**Total columns:** {len(ebay_df.columns)}")
-                        for col in ebay_df.columns[:10]:
-                            st.write(f"• {col}")
-                        if len(ebay_df.columns) > 10:
-                            st.write(f"... and {len(ebay_df.columns) - 10} more columns")
+                            ebay_df = pd.DataFrame(ebay_orders if ebay_orders else [ebay_data])
+                        else:
+                            ebay_df = pd.DataFrame([ebay_data])
+
+                        ebay_files_data.append((ebay_file.name, ebay_df))
+                        total_ebay_orders += len(ebay_df)
+
+                        st.info(f"📁 **{ebay_file.name}** → {len(ebay_df)} eBay orders")
+
+                    st.success(f"🎯 **Total: {total_ebay_orders} eBay orders from {len(ebay_files)} files**")
+                    st.session_state.ebay_files_data = ebay_files_data
+
+                    # Kolon önizlemesi (ilk dosyadan)
+                    if ebay_files_data:
+                        first_df = ebay_files_data[0][1]
+                        with st.expander("🔍 eBay Columns"):
+                            st.write(f"**Total columns:** {len(first_df.columns)}")
+                            for col in first_df.columns[:10]:
+                                st.write(f"• {col}")
+                            if len(first_df.columns) > 10:
+                                st.write(f"... and {len(first_df.columns) - 10} more columns")
 
                 except Exception as e:
-                    st.error(f"❌ eBay file could not be read: {e}")
+                    st.error(f"❌ eBay files could not be read: {e}")
 
         with col2:
             st.markdown("#### 📦 Amazon Orders (Multiple Accounts)")
@@ -1275,7 +1305,7 @@ def main():
         st.subheader("📊 Matching Results")
 
         # Eşleştirme başlatma butonu
-        if 'ebay_df' in st.session_state and 'amazon_files_data' in st.session_state:
+        if 'ebay_files_data' in st.session_state and 'amazon_files_data' in st.session_state:
 
             # Pre-matching info
             with st.expander("🔍 Pre-Matching Information"):
@@ -1344,8 +1374,14 @@ def main():
                             amazon_files_data = st.session_state.amazon_files_data
                             amazon_combined_df = matcher.combine_amazon_files(amazon_files_data)
 
+                            # eBay dosyalarını birleştir - YENİ EKLENEN
+                            status_text.text("🔄 Combining eBay files...")
+                            ebay_files_data = st.session_state.ebay_files_data
+                            ebay_combined_df = matcher.combine_ebay_files(ebay_files_data)
+
+                            # GÜNCELLENECEK KISM:
                             status_text.text(
-                                f"✅ Combined {len(amazon_combined_df)} orders from {len(amazon_files_data)} Amazon accounts")
+                                f"✅ Combined {len(ebay_combined_df)} eBay orders from {len(ebay_files_data)} files and {len(amazon_combined_df)} Amazon orders from {len(amazon_files_data)} accounts")
 
                             # Address normalization test
                             status_text.text("🔄 Testing address normalization...")
