@@ -1397,7 +1397,7 @@ def main():
 
                             # Eşleştirme yap
                             results = matcher.match_orders(
-                                ebay_df=st.session_state.ebay_df,
+                                ebay_df=ebay_combined_df,
                                 amazon_combined_df=amazon_combined_df,
                                 ebay_mapping=None,  # Auto-detect
                                 amazon_mapping=None,  # Auto-detect
@@ -1601,7 +1601,7 @@ def main():
                         st.success("✅ JSON file downloaded!")
 
                         # Session'dan tüm verileri sil
-                        keys_to_remove = ['ebay_df', 'amazon_files_data', 'match_results']
+                        keys_to_remove = ['ebay_files_data', 'amazon_files_data', 'match_results']
                         for key in keys_to_remove:
                             if key in st.session_state:
                                 del st.session_state[key]
