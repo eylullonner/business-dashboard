@@ -6,6 +6,14 @@ from config import (
     PRIORITY_DISPLAY_COLUMNS, COLUMN_DISPLAY_NAMES,
     ACCOUNT_SETTINGS, BUSINESS_METRICS, ACCOUNT_PERFORMANCE_CONFIG
 )
+try:
+    from fuzzywuzzy import fuzz
+    FUZZYWUZZY_AVAILABLE = True
+except ImportError:
+    FUZZYWUZZY_AVAILABLE = False
+    fuzz = None
+    print("WARNING: fuzzywuzzy not available for enhanced name matching")
+
 
 
 def clean_dataframe(df):
@@ -693,3 +701,71 @@ def parse_usd_amount(amount_string: str) -> float:
             return 0.0
 
     return 0.0
+
+
+# utils/data_processor.py içine eklenecek fonksiyonlar
+
+def normalize_name_for_fuzzy_matching(name: str) -> str:
+    """
+    İsmi fuzzy matching için normalize et
+    R. Wood → r wood, José → jose gibi dönüşümler
+    """
+    if not name or pd.isna(name):
+        return ""
+
+    # String'e çevir ve temizle
+    normalized = str(name).lower().strip()
+
+    # Tek harflerden sonraki noktaları kaldır (R. → R)
+    normalized = re.sub(r'\b([a-z])\.\s*', r'\1 ', normalized)
+
+    # Diğer noktalama işaretlerini boşlukla değiştir
+    normalized = re.sub(r'[^\w\s]', ' ', normalized)
+
+    # Çoklu boşlukları tek boşluğa çevir
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+
+    return normalized
+
+
+def enhanced_fuzzy_name_match(name1: str, name2: str) -> int:
+    """
+    Geliştirilmiş isim eşleştirmesi
+    Hem orijinal hem normalize edilmiş versiyonları test eder
+    """
+    if not name1 or not name2:
+        return 0
+
+    # Orijinal temizleme
+    clean1 = str(name1).lower().strip()
+    clean2 = str(name2).lower().strip()
+
+    # Normalize edilmiş versiyonlar
+    norm1 = normalize_name_for_fuzzy_matching(name1)
+    norm2 = normalize_name_for_fuzzy_matching(name2)
+
+    # Her iki versiyon için skorlar
+    original_scores = [
+        fuzz.ratio(clean1, clean2),
+        fuzz.partial_ratio(clean1, clean2),
+        fuzz.token_set_ratio(clean1, clean2)
+    ]
+
+    normalized_scores = [
+        fuzz.ratio(norm1, norm2),
+        fuzz.partial_ratio(norm1, norm2),
+        fuzz.token_set_ratio(norm1, norm2)
+    ]
+
+    # En iyi skoru döndür
+    all_scores = original_scores + normalized_scores
+    best_score = max(all_scores)
+
+    # Debug için
+    if best_score > 80:  # Yüksek skorları logla
+        print(f"DEBUG NAME MATCH: '{name1}' vs '{name2}'")
+        print(f"  Original: '{clean1}' vs '{clean2}' = {max(original_scores)}")
+        print(f"  Normalized: '{norm1}' vs '{norm2}' = {max(normalized_scores)}")
+        print(f"  Best Score: {best_score}")
+
+    return best_score

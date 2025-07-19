@@ -11,6 +11,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.international_matcher import InternationalMatcher
 from utils.debug_analyzer import AccountSeparatedDebugAnalyzer
 from utils.data_processor import calculate_single_order_profit
+from utils.data_processor import normalize_name_for_fuzzy_matching, enhanced_fuzzy_name_match
 
 # Import gerekli kütüphaneler
 try:
@@ -72,6 +73,33 @@ class DropshippingMatcher:
 
     # ========== UTILITY FUNCTIONS ==========
 
+    def find_best_match_in_address_enhanced(self, search_term: str, address: str) -> int:
+        """
+        Geliştirilmiş adres içinde isim arama
+        """
+        if not search_term or not address:
+            return 0
+
+        from utils.data_processor import enhanced_fuzzy_name_match
+
+        search_clean = search_term.lower().strip()
+        address_clean = address.lower().strip()
+
+        # Tam substring kontrolü
+        if search_clean in address_clean:
+            return 100
+
+        # Adres kelimelerini parse et
+        address_words = re.split(r'[^\w]+', address_clean)
+        best_score = 0
+
+        for word in address_words:
+            if word and len(word) >= 2:
+                score = enhanced_fuzzy_name_match(search_term, word)
+                if score > best_score:
+                    best_score = score
+
+        return best_score
     def parse_date(self, date_str: str) -> Optional[datetime]:
         """Tarih string'ini datetime objesine çevir"""
         if not date_str or pd.isna(date_str):
@@ -578,7 +606,7 @@ class DropshippingMatcher:
             }
 
         # Adres eşleştirmesi
-        name_score = self.find_best_match_in_address(
+        name_score = self.find_best_match_in_address_enhanced(
             ebay_order.get('buyer_name', ''), amazon_address)
         city_score = self.find_best_match_in_address(
             ebay_order.get('ship_city', ''), amazon_address)
