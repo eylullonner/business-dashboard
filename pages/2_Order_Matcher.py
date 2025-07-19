@@ -962,6 +962,7 @@ class DropshippingMatcher:
         match_counter = 1
         international_matches = 0
         domestic_matches = 0
+        used_amazon_orders = set()  # YENİ SATIR - Duplicate control
 
         print(f"🔍 EŞLEŞTIRME BAŞLIYOR: {len(ebay_normalized)} eBay vs {len(amazon_normalized)} Amazon")
 
@@ -978,6 +979,8 @@ class DropshippingMatcher:
 
                 potansiyel_sayisi = 0
                 eis_co_deneme = 0
+
+
 
                 for amazon_idx, amazon_order in amazon_normalized.iterrows():
                     amazon_dict = amazon_order.to_dict()
@@ -1014,37 +1017,78 @@ class DropshippingMatcher:
                                   ebay_order_dict.get('order_id', 'N/A'))
 
             # Normal eşleştirme mantığı
-            potential_matches = []
 
-            for amazon_idx, amazon_order in amazon_normalized.iterrows():
-                match_result = self.calculate_match_score_with_international(
-                    ebay_order_dict, amazon_order.to_dict()
-                )
+                # pages/2_Order_Matcher.py - match_orders fonksiyonunda değişiklik
 
-                if match_result['is_match'] and match_result['total_score'] >= self.threshold:
-                    potential_matches.append({
-                        'amazon_idx': amazon_idx,
-                        'amazon_order': amazon_order,
-                        'match_score': match_result['total_score'],
-                        'days_difference': match_result.get('days_difference', 0),
-                        'match_details': match_result
-                    })
+                # Bu bölümü bulun ve değiştirin (yaklaşık 150-180. satırlar):
 
-            # En iyi eşleşmeyi seç
-            if not potential_matches:
-                continue
+                # Normal eşleştirme mantığı
+                potential_matches = []
 
-            if len(potential_matches) == 1:
-                best_match = potential_matches[0]
-            else:
-                min_days = min(match['days_difference'] for match in potential_matches)
-                closest_matches = [match for match in potential_matches if match['days_difference'] == min_days]
+                for amazon_idx, amazon_order in amazon_normalized.iterrows():
+                    amazon_dict = amazon_order.to_dict()
 
-                if len(closest_matches) == 1:
-                    best_match = closest_matches[0]
+                    # Composite key oluştur
+                    amazon_composite_key = f"{amazon_dict.get('orderId', '')}_{amazon_dict.get('amazon_account', '')}"
+
+                    # Skip if already used
+                    if amazon_composite_key in used_amazon_orders:
+                        continue
+
+                    match_result = self.calculate_match_score_with_international(
+                        ebay_order_dict, amazon_dict
+                    )
+
+                    if match_result['is_match'] and match_result['total_score'] >= self.threshold:
+                        potential_matches.append({
+                            'amazon_idx': amazon_idx,
+                            'amazon_order': amazon_order,
+                            'amazon_composite_key': amazon_composite_key,
+                            'match_score': match_result['total_score'],
+                            'days_difference': match_result.get('days_difference', 0),
+                            'match_details': match_result,
+                            'amazon_account': amazon_dict.get('amazon_account', 'unknown'),
+                            'amazon_orderid': amazon_dict.get('orderId', 'N/A')
+                        })
+
+                # En iyi eşleşmeyi seç - DATE-BASED SMART SELECTION
+                if not potential_matches:
+                    continue
+
+                if len(potential_matches) == 1:
+                    best_match = potential_matches[0]
                 else:
-                    best_match = max(closest_matches, key=lambda x: x['match_score'])
+                    # ENHANCED SELECTION - Date priority
+                    print(f"🎯 Multiple matches for eBay {ebay_order_dict.get('buyer_name', 'N/A')}:")
 
+                    # 1. En yakın tarihi bul (minimum days_difference)
+                    min_days = min(match['days_difference'] for match in potential_matches)
+                    closest_date_matches = [match for match in potential_matches if
+                                            match['days_difference'] == min_days]
+
+                    print(f"   📅 Closest date matches ({min_days} days): {len(closest_date_matches)}")
+
+                    if len(closest_date_matches) == 1:
+                        best_match = closest_date_matches[0]
+                        print(f"   ✅ Selected by date: {best_match['amazon_account']} - {best_match['amazon_orderid']}")
+                    else:
+                        # 2. Aynı tarihte birden fazla varsa, en yüksek score'u al
+                        best_match = max(closest_date_matches, key=lambda x: x['match_score'])
+                        print(
+                            f"   ✅ Selected by score: {best_match['amazon_account']} - {best_match['amazon_orderid']} (Score: {best_match['match_score']})")
+
+                    # Debug için diğer seçenekleri göster
+                    for i, match in enumerate(potential_matches):
+                        status = "✅ SELECTED" if match == best_match else "⏭️ Skipped"
+                        print(
+                            f"   {status} Option {i + 1}: {match['amazon_account']} - Days: {match['days_difference']}, Score: {match['match_score']}")
+
+                # Mark as used BEFORE creating record
+                used_amazon_orders.add(best_match['amazon_composite_key'])
+
+                # Record creation (existing code continues...)
+                selected_amazon_idx = best_match['amazon_idx']
+                # ... rest of the code remains the same
             # Record creation
             selected_amazon_idx = best_match['amazon_idx']
             ebay_original_data = ebay_original.loc[ebay_idx].to_dict()
