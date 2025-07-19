@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+import re
 from config import (
     NUMERIC_FIELDS, EXCLUDED_COLUMNS, DATE_COLUMNS,
     PRIORITY_DISPLAY_COLUMNS, COLUMN_DISPLAY_NAMES,
@@ -523,3 +524,172 @@ def create_account_comparison_data(df):
     except Exception as e:
         st.error(f"❌ Comparison data creation error: {str(e)}")
         return pd.DataFrame()
+
+
+def calculate_single_order_profit(ebay_data: dict, amazon_data: dict) -> dict:
+    """
+    Tek sipariş için kâr metriklerini hesapla - Order Matcher'dan taşındı
+    Exchange rate handling, TRY→USD conversion, ROI, return detection dahil
+    """
+    try:
+        # Exchange rate handler'ı import et (opsiyonel)
+        try:
+            import sys, os
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from utils.exchange_rate_handler import ExchangeRateHandler
+            rate_handler = ExchangeRateHandler()
+        except ImportError:
+            rate_handler = None
+
+        # eBay geliri
+        ebay_earning = 0.0
+        for field in ['Order earnings', 'order_earnings', 'earnings', 'profit', 'revenue']:
+            if field in ebay_data and pd.notna(ebay_data[field]):
+                try:
+                    ebay_earning = float(ebay_data[field])
+                    break
+                except (ValueError, TypeError):
+                    continue
+
+        # Return Detection - Amazon iade kontrolü
+        possible_fields = [
+            'deliveryStatus',
+            'amazon_deliverystatus',
+            'amazon_delivery_status',
+            'amazon_status',
+            'deliverystatus',
+            'delivery_status',
+            'status'
+        ]
+
+        delivery_status_raw = ''
+        for field in possible_fields:
+            if field in amazon_data and amazon_data[field]:
+                delivery_status_raw = amazon_data[field]
+                break
+
+        delivery_status = str(delivery_status_raw).strip().lower()
+        return_keywords = ['returned', 'refunded', 'refund', 'cancelled', 'return complete']
+        is_returned = any(keyword in delivery_status for keyword in return_keywords)
+
+        # Amazon maliyeti hesaplama - Return detection öncelikli
+        amazon_cost_usd = 0.0
+        cost_calculation_method = "unknown"
+        actual_exchange_rate = None
+
+        if is_returned:
+            # Ürün iade edilmişse cost = 0
+            amazon_cost_usd = 0.0
+            cost_calculation_method = "return_detected_cost_zero"
+        else:
+            # Normal cost calculation - 4 YÖNTEMLİ + KUR BİLGİSİ
+            order_total = amazon_data.get('orderTotal') or amazon_data.get('grand_total', '')
+
+            # PRIORITY 1: USD Direct
+            if order_total and ('USD' in str(order_total) or '$' in str(order_total)):
+                usd_amount = parse_usd_amount(str(order_total))
+                if usd_amount > 0:
+                    amazon_cost_usd = usd_amount
+                    cost_calculation_method = "usd_direct_no_conversion"
+
+            # PRIORITY 2: TRY + API (KUR BİLGİSİ ALMA)
+            elif order_total and 'TRY' in str(order_total) and rate_handler:
+                order_date = amazon_data.get('orderDate') or amazon_data.get('order_date', '')
+
+                if order_date:
+                    success, calculated_cost, calc_message = rate_handler.calculate_amazon_cost_usd(
+                        order_total, order_date
+                    )
+
+                    if success:
+                        amazon_cost_usd = calculated_cost
+
+                        # GERÇEK KUR BİLGİSİNİ AL
+                        try_amount = parse_usd_amount(order_total)  # TRY miktarı
+                        if try_amount > 0 and calculated_cost > 0:
+                            actual_exchange_rate = round(try_amount / calculated_cost, 2)
+                            cost_calculation_method = f"api_rate_{actual_exchange_rate}_try_per_usd"
+                        else:
+                            cost_calculation_method = "api_conversion_success"
+
+            # PRIORITY 3: Existing USD Field
+            if amazon_cost_usd == 0.0:  # Yukarıdakiler başarısızsa
+                for field in ['amazon_cost_usd', 'Amazon cost USD', 'cost_usd', 'usd_cost']:
+                    if field in amazon_data and pd.notna(amazon_data[field]):
+                        amazon_cost_str = str(amazon_data[field])
+                        if amazon_cost_str and amazon_cost_str != 'Not available':
+                            parsed_usd = parse_usd_amount(amazon_cost_str)
+                            if parsed_usd > 0:
+                                amazon_cost_usd = parsed_usd
+                                cost_calculation_method = "existing_usd_field"
+                                break
+
+            # PRIORITY 4: Sabit Kur Fallback (KUR BİLGİSİ)
+            if amazon_cost_usd == 0.0 and order_total and 'TRY' in str(order_total):
+                try_amount = parse_usd_amount(order_total)  # TRY parse eder
+                if try_amount > 0:
+                    # Sabit kur kullan (güncel TRY/USD ~34)
+                    FALLBACK_RATE = 34.0  # 1 USD = 34 TRY
+                    amazon_cost_usd = try_amount / FALLBACK_RATE
+                    actual_exchange_rate = FALLBACK_RATE
+                    cost_calculation_method = f"fallback_rate_{FALLBACK_RATE}_try_per_usd"
+
+        # Hesaplamalar
+        profit_usd = ebay_earning - amazon_cost_usd
+        margin_percent = (profit_usd / ebay_earning * 100) if ebay_earning > 0 else 0
+
+        # ROI hesaplaması: (Profit / Investment) * 100
+        # Investment = Amazon cost (ne kadar para harcadık)
+        roi_percent = (profit_usd / amazon_cost_usd * 100) if amazon_cost_usd > 0 else 0
+
+        return {
+            'calculated_ebay_earning_usd': round(ebay_earning, 2),
+            'calculated_amazon_cost_usd': round(amazon_cost_usd, 2),
+            'calculated_profit_usd': round(profit_usd, 2),
+            'calculated_margin_percent': round(margin_percent, 2),
+            'calculated_roi_percent': round(roi_percent, 2),
+            'cost_calculation_method': cost_calculation_method,
+            'exchange_rate_used': actual_exchange_rate
+        }
+
+    except Exception as e:
+        return {
+            'calculated_ebay_earning_usd': 0.0,
+            'calculated_amazon_cost_usd': 0.0,
+            'calculated_profit_usd': 0.0,
+            'calculated_margin_percent': 0.0,
+            'calculated_roi_percent': 0.0,
+            'cost_calculation_method': f"error: {str(e)}",
+            'exchange_rate_used': None
+        }
+
+
+def parse_usd_amount(amount_string: str) -> float:
+    """USD/TRY string'ini float'a çevir - Order Matcher'dan taşındı"""
+    if not amount_string or pd.isna(amount_string):
+        return 0.0
+
+    amount_str = str(amount_string).strip()
+
+    # USD için: "$25.50", "USD 25.50", "25.50 USD"
+    if 'USD' in amount_str or '$' in amount_str:
+        clean_str = amount_str.replace('USD', '').replace('$', '').strip()
+    else:
+        # TRY için: "TRY 693.08", "693.08 TRY", "₺693.08"
+        clean_str = amount_str.replace('TRY', '').replace('₺', '').strip()
+
+    # Virgülleri handle et
+    if ',' in clean_str and '.' in clean_str:
+        clean_str = clean_str.replace(',', '')
+    elif ',' in clean_str and '.' not in clean_str:
+        clean_str = clean_str.replace(',', '.')
+
+    # Sayıları extract et
+    numbers = re.findall(r'\d+\.?\d*', clean_str)
+    if numbers:
+        try:
+            return float(numbers[-1])
+        except ValueError:
+            return 0.0
+
+    return 0.0
