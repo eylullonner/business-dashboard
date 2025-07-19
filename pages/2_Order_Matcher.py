@@ -7,30 +7,54 @@ from typing import Dict, List, Tuple, Optional
 import warnings
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.international_matcher import InternationalMatcher
-from utils.debug_analyzer import AccountSeparatedDebugAnalyzer
-from utils.data_processor import calculate_single_order_profit
-from utils.data_processor import normalize_name_for_fuzzy_matching, enhanced_fuzzy_name_match
 
-# Import gerekli kütüphaneler
+# DEPLOY-SAFE IMPORT - Hem local hem Streamlit Cloud için
+try:
+    # Streamlit Cloud path
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from utils.international_matcher import InternationalMatcher
+    from utils.debug_analyzer import AccountSeparatedDebugAnalyzer
+    from utils.data_processor import calculate_single_order_profit
+    print("✅ Utils imported successfully (Streamlit Cloud path)")
+except ImportError:
+    try:
+        # Local development path
+        import sys
+        import os
+        sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+        from utils.international_matcher import InternationalMatcher
+        from utils.debug_analyzer import AccountSeparatedDebugAnalyzer
+        from utils.data_processor import calculate_single_order_profit
+        print("✅ Utils imported successfully (Local path)")
+    except ImportError as e:
+        st.error(f"❌ Import error: {e}")
+        st.error("Please check if utils folder is in the correct location")
+        st.stop()
+
+# Enhanced name matching import - FALLBACK approach
+try:
+    from utils.data_processor import enhanced_fuzzy_name_match
+    ENHANCED_MATCHING_AVAILABLE = True
+    print("✅ Enhanced name matching imported")
+except ImportError:
+    ENHANCED_MATCHING_AVAILABLE = False
+    print("⚠️ Enhanced name matching not available - using fallback")
+
+# Diğer import'lar
 try:
     from fuzzywuzzy import fuzz
-
     FUZZYWUZZY_AVAILABLE = True
 except ImportError:
     FUZZYWUZZY_AVAILABLE = False
 
 try:
     import plotly.express as px
-
     PLOTLY_AVAILABLE = True
 except ImportError:
     PLOTLY_AVAILABLE = False
 
 try:
     from dateutil import parser as date_parser
-
     DATEUTIL_AVAILABLE = True
 except ImportError:
     DATEUTIL_AVAILABLE = False
