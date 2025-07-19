@@ -16,7 +16,7 @@ class InternationalMatcher:
     """
 
     def __init__(self):
-        # SADECE eIS CO patterns (basit ve güvenilir)
+        # Yaygın tarih formatları
         self.eis_patterns = [
             r'eIS\s+CO\s+(.+)',  # "eIS CO Jose Gonzalez"
             r'eis\s+co\s+(.+)',  # "eis co Jose Gonzalez"
@@ -29,14 +29,19 @@ class InternationalMatcher:
             'GB', 'DE', 'FR', 'IT', 'ES', 'JP', 'KR', 'IN'
         }
 
-        # Default thresholds for eIS CO matching
-        self.name_threshold = 85  # High confidence for name matching
-        self.product_threshold = 60  # Lower threshold for international
+        # YENİ EŞIK DEĞERLERİ:
+        self.name_threshold = 95  # %95'e çıkarıldı
+        self.product_threshold = 50  # Aynı kaldı
 
     def extract_amazon_shipping_address(self, amazon_order: Dict) -> str:
-        """
-        Extract shipping address from various Amazon formats
-        """
+        # YENİ EKLENEN DEBUG SATIRLARI:
+        print(f"🔍 Amazon order keys: {list(amazon_order.keys())}")
+
+        if 'shippingAddress' in amazon_order:
+            shipping = amazon_order['shippingAddress']
+            print(f"🔍 shippingAddress içeriği: {shipping}")
+            if isinstance(shipping, dict) and 'name' in shipping:
+                print(f"📝 Name bulundu: {shipping['name']}")
         # Try different address fields
         address_fields = [
             'full_address',
@@ -67,6 +72,12 @@ class InternationalMatcher:
         ebay_buyer = ebay_order.get('Buyer name', '').strip()
         amazon_address = self.extract_amazon_shipping_address(amazon_order)
 
+        # DETAILED DEBUG FOR ALL eIS CO ATTEMPTS
+        if 'eIS CO' in str(amazon_address):
+            print(f"🌍 eIS CO DETECTION ATTEMPT:")
+            print(f"   eBay Buyer: '{ebay_buyer}'")
+            print(f"   Amazon Address: '{amazon_address}'")
+
         if not ebay_buyer or not amazon_address:
             return self._no_match_result()
 
@@ -75,25 +86,43 @@ class InternationalMatcher:
             match = re.search(pattern, amazon_address, re.IGNORECASE)
             if match:
                 extracted_name = match.group(1).strip()
-
-                # Clean extracted name (remove warehouse codes)
-                # "Jose Gonzalez EVTN NJQVNRC" → "Jose Gonzalez"
                 cleaned_name = self._clean_extracted_name(extracted_name)
 
-                # Calculate name similarity
-                similarity = fuzz.ratio(ebay_buyer.lower(), cleaned_name.lower())
+                print(f"   ✅ Pattern matched: {pattern}")
+                print(f"   📝 Raw extracted: '{extracted_name}'")
+                print(f"   🧹 Cleaned name: '{cleaned_name}'")
 
-                if similarity >= self.name_threshold:
+                # Calculate similarity
+                similarity = fuzz.ratio(ebay_buyer.lower(), cleaned_name.lower())
+                partial_similarity = fuzz.partial_ratio(ebay_buyer.lower(), cleaned_name.lower())
+                token_similarity = fuzz.token_set_ratio(ebay_buyer.lower(), cleaned_name.lower())
+
+                print(f"   📊 Similarity Scores:")
+                print(f"      - Ratio: {similarity}%")
+                print(f"      - Partial: {partial_similarity}%")
+                print(f"      - Token: {token_similarity}%")
+                print(f"      - Threshold: {self.name_threshold}%")
+
+                # Use the highest score
+                best_similarity = max(similarity, partial_similarity, token_similarity)
+
+                if best_similarity >= self.name_threshold:
+                    print(f"   ✅ MATCH SUCCESS! Best score: {best_similarity}%")
                     return {
                         'detected': True,
                         'pattern_type': 'eis_co',
-                        'confidence': similarity,
+                        'confidence': best_similarity,
                         'extracted_name': cleaned_name,
                         'original_extraction': extracted_name,
                         'match_pattern': pattern,
                         'ebay_buyer': ebay_buyer,
                         'is_international': self._is_international_order(ebay_order)
                     }
+                else:
+                    print(f"   ❌ Below threshold: {best_similarity}% < {self.name_threshold}%")
+
+        if 'eIS CO' in str(amazon_address):
+            print(f"   ❌ eIS CO pattern found but no regex match")
 
         return self._no_match_result()
 
@@ -138,15 +167,6 @@ class InternationalMatcher:
                                             title_similarity_func, date_check_func) -> Dict:
         """
         Calculate match score for international orders using eIS CO pattern
-
-        Args:
-            ebay_order: eBay order dict
-            amazon_order: Amazon order dict
-            title_similarity_func: Function to calculate product title similarity
-            date_check_func: Function to validate date logic
-
-        Returns:
-            Match result dict with score and match status
         """
         # Detect eIS CO pattern
         eis_result = self.detect_eis_co_pattern(ebay_order, amazon_order)
@@ -163,21 +183,33 @@ class InternationalMatcher:
         print(f"   Extracted: {eis_result['extracted_name']}")
 
         # Validate with product similarity
-        title_score = title_similarity_func(
-            ebay_order.get('Item title', ''),
-            amazon_order.get('item_title', '') or amazon_order.get('amazon_item_title', '')
-        )
+        ebay_title = ebay_order.get('Item title', '')
+        amazon_title = amazon_order.get('item_title', '') or amazon_order.get('amazon_item_title', '')
+
+        print(f"🔍 PRODUCT VALIDATION:")
+        print(f"   eBay title: '{ebay_title}'")
+        print(f"   Amazon title: '{amazon_title}'")
+
+        title_score = title_similarity_func(ebay_title, amazon_title)
+        print(f"   📊 Product similarity: {title_score}% (Threshold: {self.product_threshold}%)")
 
         # Validate with date logic
-        date_valid, date_info, days_diff = date_check_func(
-            ebay_order.get('Order creation date', ''),
-            amazon_order.get('order_date', '') or amazon_order.get('orderDate', '')
-        )
+        ebay_date = ebay_order.get('Order creation date', '')
+        amazon_date = amazon_order.get('order_date', '') or amazon_order.get('orderDate', '')
+
+        print(f"🔍 DATE VALIDATION:")
+        print(f"   eBay date: '{ebay_date}'")
+        print(f"   Amazon date: '{amazon_date}'")
+
+        date_valid, date_info, days_diff = date_check_func(ebay_date, amazon_date)
+        print(f"   📅 Date valid: {date_valid} ({date_info}) - Diff: {days_diff} days")
 
         # International matching logic
         if title_score >= self.product_threshold and date_valid:
-            # Calculate final score (higher weight on name for international)
             final_score = min(95, eis_result['confidence'] * 0.7 + title_score * 0.3)
+
+            print(f"🎉 VALIDATION SUCCESS!")
+            print(f"   📊 Final score: {final_score}")
 
             return {
                 'total_score': final_score,
@@ -189,7 +221,10 @@ class InternationalMatcher:
                 'days_difference': days_diff
             }
         else:
-            # eIS CO detected but validation failed
+            print(f"❌ VALIDATION FAILED!")
+            print(f"   Product: {title_score}% >= {self.product_threshold}% ? {title_score >= self.product_threshold}")
+            print(f"   Date: {date_valid}")
+
             return {
                 'total_score': 0,
                 'is_match': False,
@@ -235,69 +270,3 @@ class InternationalMatcher:
             self.product_threshold = product_threshold
 
         print(f"📊 International thresholds updated: Name={self.name_threshold}%, Product={self.product_threshold}%")
-
-
-# Test function for development
-def test_international_matcher():
-    """
-    Test function for eIS CO pattern detection - SADECE eIS CO
-    """
-    matcher = InternationalMatcher()
-
-    # Test case 1: Perfect eIS CO match
-    ebay_order = {
-        'Buyer name': 'Jose Gonzalez',
-        'Ship to country': 'MX'
-    }
-
-    amazon_order = {
-        'shippingAddress': {
-            'name': 'eIS CO Jose Gonzalez'
-        }
-    }
-
-    result = matcher.detect_eis_co_pattern(ebay_order, amazon_order)
-    print("Test 1 - Perfect eIS CO Match:")
-    print(f"Detected: {result['detected']}")
-    print(f"Confidence: {result['confidence']}%")
-    print(f"Extracted: {result.get('extracted_name', 'N/A')}")
-    print()
-
-    # Test case 2: eIS CO with warehouse info (realistic)
-    amazon_order_2 = {
-        'full_address': 'eIS CO Jose Maria Gonzalez\nEVTN NJQVNRC\n110 INTERNATIONALE BLVD'
-    }
-
-    ebay_order_2 = {
-        'Buyer name': 'Jose Maria Gonzalez',
-        'Ship to country': 'MX'
-    }
-
-    result_2 = matcher.detect_eis_co_pattern(ebay_order_2, amazon_order_2)
-    print("Test 2 - eIS CO with Warehouse Info:")
-    print(f"Detected: {result_2['detected']}")
-    print(f"Confidence: {result_2['confidence']}%")
-    print(f"Extracted: {result_2.get('extracted_name', 'N/A')}")
-    print()
-
-    # Test case 3: Case insensitive
-    amazon_order_3 = {
-        'shippingAddress': {
-            'name': 'eis co Maria Santos'  # lowercase
-        }
-    }
-
-    ebay_order_3 = {
-        'Buyer name': 'Maria Santos',
-        'Ship to country': 'MX'
-    }
-
-    result_3 = matcher.detect_eis_co_pattern(ebay_order_3, amazon_order_3)
-    print("Test 3 - Case Insensitive:")
-    print(f"Detected: {result_3['detected']}")
-    print(f"Confidence: {result_3['confidence']}%")
-    print(f"Extracted: {result_3.get('extracted_name', 'N/A')}")
-
-
-if __name__ == "__main__":
-    test_international_matcher()

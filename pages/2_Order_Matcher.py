@@ -66,9 +66,9 @@ class DropshippingMatcher:
             'state': 0.08
         }
         self.threshold = threshold
+        self.international_matcher = InternationalMatcher()
 
     # ========== UTILITY FUNCTIONS ==========
-        self.international_matcher = InternationalMatcher()
 
     def parse_date(self, date_str: str) -> Optional[datetime]:
         """Tarih string'ini datetime objesine çevir"""
@@ -546,6 +546,33 @@ class DropshippingMatcher:
 
             return normalized_df
 
+    # 🆕 ENHANCED MATCHING WITH INTERNATIONAL SUPPORT
+    def calculate_match_score_with_international(self, ebay_order: Dict, amazon_order: Dict) -> Dict:
+        """Enhanced matching with international eIS CO pattern detection"""
+
+        # 🧪 DEBUG: Show ALL eIS CO attempts
+        if 'shippingAddress' in amazon_order and 'name' in amazon_order['shippingAddress']:
+            amazon_name = amazon_order['shippingAddress']['name']
+            if 'eIS CO' in amazon_name:
+                ebay_buyer = ebay_order.get('buyer_name', 'N/A')
+                ebay_country = ebay_order.get('ship_country', 'N/A')
+                print(f"🌍 TRYING eIS CO: Amazon='{amazon_name}' vs eBay='{ebay_buyer}' (Country: {ebay_country})")
+
+        # STEP 1: Try international matching first
+        international_result = self.international_matcher.calculate_international_match_score(
+            ebay_order,
+            amazon_order,
+            title_similarity_func=self.calculate_title_similarity,
+            date_check_func=self.check_date_logic
+        )
+
+        # If international match found, return it
+        if international_result['is_match']:
+            return international_result
+
+        # STEP 2: Fallback to normal domestic matching
+        return self.calculate_match_score_enhanced(ebay_order, amazon_order)
+
     def calculate_match_score_enhanced(self, ebay_order: Dict, amazon_order: Dict) -> Dict:
         """Eşleştirme skorunu hesapla - Geliştirilmiş address handling"""
         amazon_address = ""
@@ -621,62 +648,9 @@ class DropshippingMatcher:
             'date_status': date_info
         }
 
+    # 🔄 UPDATED: Use international matching
     def calculate_match_score(self, ebay_order: Dict, amazon_order: Dict) -> Dict:
-        """
-        Main matching method with international eIS CO support
-        """
         return self.calculate_match_score_with_international(ebay_order, amazon_order)
-
-    def calculate_match_score_with_international(self, ebay_order: Dict, amazon_order: Dict) -> Dict:
-        """
-        Enhanced matching with international pattern detection
-        """
-
-        # STEP 1: Try international matching first
-        international_result = self.international_matcher.calculate_international_match_score(
-            ebay_order,
-            amazon_order,
-            title_similarity_func=self.calculate_title_similarity,
-            date_check_func=self.check_date_logic
-        )
-
-        # If international match found, return it
-        if international_result['is_match']:
-            return international_result
-
-        # STEP 2: Fallback to normal domestic matching
-        return self.calculate_match_score_enhanced(ebay_order, amazon_order)
-
-    # 🆕 ADD: Enhanced create_match_record with international info
-    def create_match_record_with_international(self, ebay_data: Dict, amazon_data: Dict,
-                                               match_details: Dict, match_counter: int,
-                                               exclude_fields: List[str] = None) -> Dict:
-        """
-        Create match record with international routing information
-        """
-        # Use existing create_match_record
-        match_record = self.create_match_record(
-            ebay_data, amazon_data, match_details, match_counter, exclude_fields
-        )
-
-        # Add international-specific fields
-        if match_details.get('match_method') == 'eis_co_international':
-            international_info = match_details.get('international_info', {})
-
-            # Add international flags
-            match_record['is_international_order'] = True
-            match_record['routing_method'] = 'eis_co_warehouse'
-            match_record['extracted_buyer_name'] = international_info.get('extracted_name', '')
-            match_record['name_match_confidence'] = international_info.get('confidence', 0)
-
-            # Add eBay country info
-            if 'Ship to country' in ebay_data:
-                match_record['ebay_destination_country'] = ebay_data['Ship to country']
-        else:
-            match_record['is_international_order'] = False
-            match_record['routing_method'] = 'direct_shipping'
-
-        return match_record
 
     # TRY → USD çevirim - Embedded rate olmadan (4 yöntem)
 
@@ -737,6 +711,7 @@ class DropshippingMatcher:
                 # Normal cost calculation - 4 YÖNTEMLİ + KUR BİLGİSİ
                 order_total = amazon_data.get('orderTotal') or amazon_data.get('grand_total', '')
 
+                # PRIORITY 1: USD Direct
                 # PRIORITY 1: USD Direct
                 if order_total and ('USD' in str(order_total) or '$' in str(order_total)):
                     usd_amount = self.parse_usd_amount(str(order_total))
@@ -868,6 +843,37 @@ class DropshippingMatcher:
 
         print(f"DEBUG - Combined total: {len(combined_df)} eBay records from {len(ebay_files_data)} files")
         return combined_df
+
+    # 🆕 ENHANCED RECORD CREATION WITH INTERNATIONAL INFO
+    def create_match_record_with_international(self, ebay_data: Dict, amazon_data: Dict,
+                                               match_details: Dict, match_counter: int,
+                                               exclude_fields: List[str] = None) -> Dict:
+        """Create match record with international routing information"""
+
+        # Use existing create_match_record
+        match_record = self.create_match_record(
+            ebay_data, amazon_data, match_details, match_counter, exclude_fields
+        )
+
+        # Add international-specific fields
+        if match_details.get('match_method') == 'eis_co_international':
+            international_info = match_details.get('international_info', {})
+
+            # Add international flags
+            match_record['is_international_order'] = True
+            match_record['routing_method'] = 'eis_co_warehouse'
+            match_record['extracted_buyer_name'] = international_info.get('extracted_name', '')
+            match_record['name_match_confidence'] = international_info.get('confidence', 0)
+
+            # Add eBay country info
+            if 'Ship to country' in ebay_data:
+                match_record['ebay_destination_country'] = ebay_data['Ship to country']
+        else:
+            match_record['is_international_order'] = False
+            match_record['routing_method'] = 'direct_shipping'
+
+        return match_record
+
     def create_match_record(self, ebay_data: Dict, amazon_data: Dict,
                             match_details: Dict, match_counter: int,
                             exclude_fields: List[str] = None) -> Dict:
@@ -1009,47 +1015,25 @@ class DropshippingMatcher:
 
         return match_record
 
-    # UPDATED exclude_fields list - amazon_shippingaddress'i exclude et
+    # 🔄 ENHANCED MATCH_ORDERS WITH INTERNATIONAL SUPPORT
     def match_orders(self, ebay_df, amazon_combined_df,
                      ebay_mapping=None, amazon_mapping=None,
                      exclude_fields=None, progress_callback=None) -> pd.DataFrame:
-        """
-        Enhanced order matching with international eIS CO support
-        """
+        """Enhanced order matching with international eIS CO support"""
 
         # UPDATED Default exclude list
         if exclude_fields is None:
             exclude_fields = [
-                "match_score",
-                "days_difference",
-                "ebay_transaction_currency",
-                "ebay_item_price",
-                "ebay_quantity",
-                "ebay_shipping_and_handling",
-                "ebay_ebay_collected_tax",
-                "ebay_item_subtotal",
-                "ebay_seller_collected_tax",
-                "ebay_discount",
-                "ebay_payout_currency",
-                "ebay_gross_amount",
-                "ebay_final_value_fee_-_fixed",
-                "ebay_final_value_fee_-_variable",
-                "ebay_below_standard_performance_fee",
-                "ebay_very_high_\"item_not_as_described\"_fee",
-                "ebay_international_fee",
-                "ebay_deposit_processing_fee",
-                "ebay_regulatory_operating_fee",
-                "ebay_promoted_listing_standard_fee",
-                "ebay_charity_donation",
-                "ebay_shipping_labels",
-                "ebay_payment_dispute_fee",
-                "ebay_expenses",
-                "ebay_order_earnings",
-                "amazon_extractedat",
-                "amazon_shippingaddress",
-                "amazon_products",
-                "amazon_ordertotal",
-                "calculated_is_profitable"
+                "match_score", "days_difference", "ebay_transaction_currency",
+                "ebay_item_price", "ebay_quantity", "ebay_shipping_and_handling",
+                "ebay_ebay_collected_tax", "ebay_item_subtotal", "ebay_seller_collected_tax",
+                "ebay_discount", "ebay_payout_currency", "ebay_gross_amount",
+                "ebay_final_value_fee_-_fixed", "ebay_final_value_fee_-_variable",
+                "ebay_below_standard_performance_fee", "ebay_very_high_\"item_not_as_described\"_fee",
+                "ebay_international_fee", "ebay_deposit_processing_fee", "ebay_regulatory_operating_fee",
+                "ebay_promoted_listing_standard_fee", "ebay_charity_donation", "ebay_shipping_labels",
+                "ebay_payment_dispute_fee", "ebay_expenses", "ebay_order_earnings", "amazon_extractedat",
+                "amazon_shippingaddress", "amazon_products", "amazon_ordertotal", "calculated_is_profitable"
             ]
 
         # Otomatik kolon tespiti
@@ -1058,62 +1042,93 @@ class DropshippingMatcher:
         if amazon_mapping is None:
             amazon_mapping = self.auto_detect_columns(amazon_combined_df, 'amazon')
 
+        print("🔍 RAW DATA KONTROL:")
+        jose_raw = ebay_df[ebay_df['Buyer name'].str.contains('Jose', na=False, case=False)]
+        print(f"Raw eBay'de Jose: {len(jose_raw)} records")
+        if len(jose_raw) > 0:
+            print(f"Jose raw data: '{jose_raw.iloc[0]['Buyer name']}'")
+
+        eis_raw = amazon_combined_df[amazon_combined_df['shippingAddress'].apply(
+            lambda x: 'eIS CO' in str(x.get('name', '')) if isinstance(x, dict) else False
+        )]
+        print(f"Raw Amazon'da eIS CO: {len(eis_raw)} records")
+
         # Veriyi normalize et
         ebay_normalized = self.normalize_data(ebay_df, ebay_mapping, 'ebay')
         amazon_normalized = self.normalize_data(amazon_combined_df, amazon_mapping, 'amazon')
 
+        print("🔍 NORMALIZED DATA KONTROL:")
+        jose_norm = ebay_normalized[ebay_normalized['buyer_name'].str.contains('Jose', na=False, case=False)]
+        print(f"Normalized eBay'de Jose: {len(jose_norm)} records")
+        if len(jose_norm) > 0:
+            print(f"Jose normalized data: '{jose_norm.iloc[0]['buyer_name']}'")
+            print(f"Jose index: {jose_norm.index[0]}")
+        else:
+            print("❌ JOSE NORMALIZATION'DA KAYBOLDU!")
+
         # Orijinal veri
         ebay_original = ebay_df.copy()
         amazon_original = amazon_combined_df.copy()
-
-        # 🆕 International order analysis
-        international_orders = 0
-        domestic_orders = 0
-
-        # Check for country field variations
-        country_field = None
-        possible_country_fields = ['Ship to country', 'ship to country', 'Ship_to_country', 'country']
-
-        for field in possible_country_fields:
-            if field in ebay_df.columns:
-                country_field = field
-                break
-
-        if country_field:
-            # Normalize country values
-            ebay_countries = ebay_df[country_field].str.upper().str.strip()
-            us_variations = ['US', 'USA', 'UNITED STATES', 'AMERICA']
-
-            international_orders = len(ebay_df[~ebay_countries.isin(us_variations)])
-            domestic_orders = len(ebay_df[ebay_countries.isin(us_variations)])
-
-            print(f"DEBUG - Order analysis: {domestic_orders} domestic, {international_orders} international")
-
-            # Log country distribution
-            country_counts = ebay_countries.value_counts()
-            print(f"DEBUG - Country distribution: {dict(country_counts.head(10))}")
 
         matches = []
         match_counter = 1
         international_matches = 0
         domestic_matches = 0
 
-        print(
-            f"DEBUG - Starting enhanced matching: {len(ebay_normalized)} eBay orders vs {len(amazon_normalized)} Amazon orders")
+        print(f"🔍 EŞLEŞTIRME BAŞLIYOR: {len(ebay_normalized)} eBay vs {len(amazon_normalized)} Amazon")
 
         # Her eBay siparişi için eşleştirme yap
         for ebay_idx, ebay_order in ebay_normalized.iterrows():
             ebay_order_dict = ebay_order.to_dict()
 
+            # JOSE GONZALEZ ÖZEL DEBUG
+            if 'jose' in str(ebay_order_dict.get('buyer_name', '')).lower():
+                print(f"\n🎯 JOSE GONZALEZ BULUNDU! Index: {ebay_idx}")
+                print(f"   eBay Buyer: '{ebay_order_dict.get('buyer_name', 'N/A')}'")
+                print(f"   eBay Ürün: '{ebay_order_dict.get('item_title', 'N/A')}'")
+                print(f"   eBay Tarih: '{ebay_order_dict.get('order_date', 'N/A')}'")
+
+                potansiyel_sayisi = 0
+                eis_co_deneme = 0
+
+                for amazon_idx, amazon_order in amazon_normalized.iterrows():
+                    amazon_dict = amazon_order.to_dict()
+
+                    # eIS CO kontrol
+                    shipping_addr = amazon_dict.get('shippingAddress', {})
+                    if isinstance(shipping_addr, dict):
+                        amazon_name = shipping_addr.get('name', '')
+                        if 'eIS CO' in str(amazon_name) and 'jose' in str(amazon_name).lower():
+                            eis_co_deneme += 1
+                            print(f"   🌍 eIS CO José #{eis_co_deneme} ile denendi:")
+                            print(f"      Amazon Name: '{amazon_name}'")
+                            print(f"      Amazon Ürün: '{amazon_dict.get('item_title', 'N/A')}'")
+                            print(f"      Amazon Tarih: '{amazon_dict.get('order_date', 'N/A')}'")
+
+                            # Match score hesapla
+                            match_result = self.calculate_match_score_with_international(
+                                ebay_order_dict, amazon_dict
+                            )
+
+                            print(f"      Match Score: {match_result['total_score']}")
+                            print(f"      Is Match: {match_result['is_match']}")
+                            print(f"      Match Method: {match_result.get('match_method', 'N/A')}")
+
+                            if match_result['is_match']:
+                                potansiyel_sayisi += 1
+
+                print(f"   📊 Jose için eIS CO deneme sayısı: {eis_co_deneme}")
+                print(f"   📊 Jose için toplam potansiyel eşleşme: {potansiyel_sayisi}")
+                print(f"🎯 JOSE GONZALEZ DEBUG BİTTİ\n")
+
             if progress_callback:
                 progress_callback(ebay_idx + 1, len(ebay_normalized),
                                   ebay_order_dict.get('order_id', 'N/A'))
 
-            # Potansiyel eşleşmeleri bul
+            # Normal eşleştirme mantığı
             potential_matches = []
 
             for amazon_idx, amazon_order in amazon_normalized.iterrows():
-                # 🔄 USE: Enhanced matching with international support
                 match_result = self.calculate_match_score_with_international(
                     ebay_order_dict, amazon_order.to_dict()
                 )
@@ -1124,7 +1139,7 @@ class DropshippingMatcher:
                         'amazon_order': amazon_order,
                         'match_score': match_result['total_score'],
                         'days_difference': match_result.get('days_difference', 0),
-                        'match_details': match_result  # 🆕 Store full match details
+                        'match_details': match_result
                     })
 
             # En iyi eşleşmeyi seç
@@ -1134,17 +1149,15 @@ class DropshippingMatcher:
             if len(potential_matches) == 1:
                 best_match = potential_matches[0]
             else:
-                # Birden fazla eşleşme - en yakın tarihi seç
                 min_days = min(match['days_difference'] for match in potential_matches)
                 closest_matches = [match for match in potential_matches if match['days_difference'] == min_days]
 
                 if len(closest_matches) == 1:
                     best_match = closest_matches[0]
                 else:
-                    # Aynı tarih farkı - en yüksek skoru seç
                     best_match = max(closest_matches, key=lambda x: x['match_score'])
 
-            # 🔄 Enhanced record creation with international info
+            # Record creation
             selected_amazon_idx = best_match['amazon_idx']
             ebay_original_data = ebay_original.loc[ebay_idx].to_dict()
             amazon_original_data = amazon_original.loc[selected_amazon_idx].to_dict()
@@ -1152,7 +1165,7 @@ class DropshippingMatcher:
             match_record = self.create_match_record_with_international(
                 ebay_original_data,
                 amazon_original_data,
-                best_match['match_details'],  # 🆕 Pass match details
+                best_match['match_details'],
                 match_counter,
                 exclude_fields=exclude_fields
             )
@@ -1160,28 +1173,16 @@ class DropshippingMatcher:
             matches.append(match_record)
             match_counter += 1
 
-            # 🆕 Enhanced debug logging with match type tracking
+            # Match type tracking
             match_method = best_match['match_details'].get('match_method', 'standard')
             account_name = amazon_original_data.get('amazon_account', 'unknown')
 
             if match_method == 'eis_co_international':
                 international_matches += 1
-                international_info = best_match['match_details'].get('international_info', {})
-                extracted_name = international_info.get('extracted_name', 'N/A')
-                confidence = international_info.get('confidence', 0)
-
-                print(f"DEBUG - 🌍 International Match {match_counter - 1}: "
-                      f"eBay {ebay_order_dict.get('order_id', 'N/A')} -> "
-                      f"Amazon {amazon_original_data.get('order_id', 'N/A')} "
-                      f"(Account: {account_name}, eIS CO: {extracted_name}, Confidence: {confidence}%)")
             else:
                 domestic_matches += 1
-                print(f"DEBUG - 🏠 Domestic Match {match_counter - 1}: "
-                      f"eBay {ebay_order_dict.get('order_id', 'N/A')} -> "
-                      f"Amazon {amazon_original_data.get('order_id', 'N/A')} "
-                      f"(Account: {account_name})")
 
-        # 🆕 Final statistics
+        # Final statistics
         total_successful_matches = len(matches)
         print(f"\nDEBUG - Matching Summary:")
         print(f"  📊 Total matches found: {total_successful_matches}")
@@ -1192,13 +1193,45 @@ class DropshippingMatcher:
             international_percentage = (international_matches / total_successful_matches) * 100
             print(f"  📈 International percentage: {international_percentage:.1f}%")
 
+        # FINAL JOSE GONZALEZ DEBUG
+        print("\n" + "=" * 50)
+        print("🎯 JOSE GONZALEZ FINAL DURUMU:")
+        print("=" * 50)
+
+        # Jose Gonzalez eşleşti mi?
+        jose_matched = False
+        jose_match_info = None
+
+        for match in matches:
+            ebay_buyer = match.get('ebay_buyer_name', '')
+            if 'jose' in str(ebay_buyer).lower() and 'gonzalez' in str(ebay_buyer).lower():
+                jose_matched = True
+
+                amazon_ship_to = match.get('amazon_ship_to', '')
+                amazon_orderid = match.get('amazon_orderid', 'N/A')
+
+                if 'eIS CO' in str(amazon_ship_to):
+                    jose_match_info = f"🌍 eIS CO ile eşleşti! (Order: {amazon_orderid})"
+                else:
+                    jose_match_info = f"🏠 Normal sipariş ile eşleşti (Order: {amazon_orderid})"
+                break
+
+        if jose_matched:
+            print(f"✅ Jose Gonzalez EŞLEŞTİ: {jose_match_info}")
+        else:
+            print("❌ Jose Gonzalez EŞLEŞMEDİ!")
+
+        print("=" * 50)
+        print(f"📊 SONUÇ: {len(matches)} total matches")
+        print("=" * 50)
+
         return pd.DataFrame(matches)
 
 
 # ========== STREAMLIT UI ==========
 
 def main():
-    """Ana fonksiyon - Enhanced with International Settings"""
+    """Enhanced main function with international eIS CO support"""
     st.markdown("### 📊 Enhanced Multi-Amazon Account Support")
 
     tab1, tab2, tab3 = st.tabs(["📤 File Upload", "⚙️ Matching Settings", "📊 Results"])
@@ -1409,7 +1442,7 @@ def main():
                 help="These columns will not appear in the result JSON"
             )
 
-        # 🆕 YENİ BÖLÜM - INTERNATIONAL SETTINGS
+        # 🆕 INTERNATIONAL SETTINGS
         st.markdown("---")
         international_settings = show_international_settings()
 
@@ -1451,9 +1484,9 @@ def main():
             col1, col2, col3 = st.columns([1, 2, 1])
 
             with col2:
-                if st.button("🚀 Start Multi-Account Matching", type="primary", use_container_width=True):
+                if st.button("🚀 Start Enhanced Multi-Account Matching", type="primary", use_container_width=True):
 
-                    with st.spinner("🔄 Multi-account order matching in progress..."):
+                    with st.spinner("🔄 Enhanced multi-account order matching in progress..."):
                         try:
                             # Matcher'ı oluştur
                             matcher = DropshippingMatcher(threshold=threshold)
@@ -1504,7 +1537,7 @@ def main():
 
                             status_text.text("🔍 Starting enhanced multi-account order matching...")
 
-                            # 🆕 ENHANCED MATCHING - YENİ match_orders metodunu kullan
+                            # 🆕 ENHANCED MATCHING
                             results = matcher.match_orders(
                                 ebay_df=ebay_combined_df,
                                 amazon_combined_df=amazon_combined_df,
@@ -1563,7 +1596,7 @@ def main():
         else:
             st.info("📤 Please upload eBay JSON file and multiple Amazon JSON files first")
 
-        # Sonuçları göster (mevcut kod...)
+        # 🆕 ENHANCED RESULTS DISPLAY
         if 'match_results' in st.session_state:
             results = st.session_state.match_results
 
@@ -1599,14 +1632,84 @@ def main():
                     else:
                         st.metric("✅ Profitable Orders", "N/A")
 
-                # Rest of the results display code...
-                # (mevcut kod ile devam eder)
+                # Account performance breakdown
+                if 'amazon_account' in results.columns:
+                    st.markdown("#### 📊 Account Performance")
 
-    # Yardım bölümü
+                    account_metrics = results.groupby('amazon_account').agg({
+                        'calculated_profit_usd': ['count', 'sum', 'mean'],
+                        'calculated_amazon_cost_usd': 'sum',
+                        'calculated_ebay_earning_usd': 'sum'
+                    }).round(2)
+
+                    account_metrics.columns = ['Orders', 'Total Profit', 'Avg Profit', 'Total Cost', 'Total Revenue']
+                    account_metrics['ROI %'] = (
+                            (account_metrics['Total Profit'] / account_metrics['Total Cost']) * 100).round(1)
+
+                    st.dataframe(account_metrics, use_container_width=True)
+
+                # Enhanced data table with international info
+                st.markdown("#### 📋 Match Details")
+
+                # Display columns selection
+                display_columns = []
+                if 'master_no' in results.columns:
+                    display_columns.append('master_no')
+
+                # Amazon account
+                if 'amazon_account' in results.columns:
+                    display_columns.append('amazon_account')
+
+                # International info
+                if 'is_international_order' in results.columns:
+                    display_columns.append('is_international_order')
+                if 'routing_method' in results.columns:
+                    display_columns.append('routing_method')
+
+                # Important columns
+                important_cols = ['ebay_order_number', 'amazon_orderid', 'calculated_profit_usd']
+                for col in important_cols:
+                    if col in results.columns:
+                        display_columns.append(col)
+
+                if display_columns:
+                    st.dataframe(results[display_columns], use_container_width=True)
+
+                # 🆕 ENHANCED DOWNLOAD OPTIONS
+                st.markdown("#### 💾 Enhanced Download Options")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    # JSON indirme
+                    json_data = results.to_json(orient='records', indent=2)
+                    if st.download_button(
+                            label="📄 Download Enhanced JSON",
+                            data=json_data,
+                            file_name=f"enhanced_matched_orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                            mime="application/json"
+                    ):
+                        st.success("✅ Enhanced JSON file downloaded!")
+
+                with col2:
+                    # CSV indirme
+                    csv_data = results.to_csv(index=False)
+                    if st.download_button(
+                            label="📊 Download Enhanced CSV",
+                            data=csv_data,
+                            file_name=f"enhanced_matched_orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            mime="text/csv"
+                    ):
+                        st.success("✅ Enhanced CSV file downloaded!")
+
+            else:
+                st.warning("⚠️ No matches found")
+
+    # Enhanced help section
     st.markdown("---")
-    with st.expander("❓ Enhanced Multi-Amazon Account & International Support Help"):
+    with st.expander("❓ Enhanced Multi-Amazon Account & International eIS CO Support Help"):
         st.markdown("""
-        **🚀 New Features:**
+        **🚀 Enhanced Features:**
 
         **🌍 International eIS CO Support:**
         - Automatically detects international orders routed through eIS CO warehouse
@@ -1628,14 +1731,45 @@ def main():
         - International vs domestic match statistics
         - eIS CO confidence levels
         - Routing method indicators
-        - Country distribution analysis
+        - Account performance analysis
         """)
 
+    # DOWNLOAD BUTTONS - Tab 3'ün en altına ekleyin
+    if 'match_results' in st.session_state:
+        results = st.session_state.match_results
+
+        if hasattr(results, 'empty') and not results.empty:
+            st.markdown("---")
+            st.markdown("### 💾 Download Results")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                json_data = results.to_json(orient='records', indent=2)
+                st.download_button(
+                    label="📄 Download JSON",
+                    data=json_data,
+                    file_name=f"matched_orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json",
+                    type="primary",
+                    use_container_width=True
+                )
+
+            with col2:
+                csv_data = results.to_csv(index=False)
+                st.download_button(
+                    label="📊 Download CSV",
+                    data=csv_data,
+                    file_name=f"matched_orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    type="secondary",
+                    use_container_width=True
+                )
     # Footer
     st.caption("🔗 Order Matcher | Enhanced with Multi-Amazon Account & International eIS CO Support")
 
 
-# 🆕 YENİ FONKSIYON - main() fonksiyonundan SONRA ekle
+# 🆕 INTERNATIONAL SETTINGS FUNCTION
 def show_international_settings():
     """International matching settings UI component"""
     st.markdown("#### 🌍 International Matching Settings")
@@ -1683,4 +1817,7 @@ def show_international_settings():
 
 
 if __name__ == "__main__":
+    main()
+else:
+    # Streamlit import edildiğinde otomatik çalıştır
     main()
