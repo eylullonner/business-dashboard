@@ -1055,64 +1055,96 @@ class DropshippingMatcher:
                 if not potential_matches:
                     continue
 
+                    # Debug için eBay bilgilerini logla
+                ebay_buyer = ebay_order_dict.get('buyer_name', 'N/A')
+                ebay_order_num = ebay_order_dict.get('order_id', 'N/A')
+                ebay_date = ebay_order_dict.get('order_date', 'N/A')
+
                 if len(potential_matches) == 1:
                     best_match = potential_matches[0]
+                    print(f"📍 Single match for {ebay_buyer}: {best_match['amazon_account']}")
                 else:
-                    # ENHANCED SELECTION - Date priority
-                    print(f"🎯 Multiple matches for eBay {ebay_order_dict.get('buyer_name', 'N/A')}:")
+                    # MULTI-FACTOR SMART SELECTION
+                    print(f"\n🎯 Smart selection for eBay {ebay_buyer} ({ebay_order_num}, {ebay_date}):")
+                    print(f"   Found {len(potential_matches)} potential matches:")
 
-                    # 1. En yakın tarihi bul (minimum days_difference)
+                    # Log all options
+                    for i, match in enumerate(potential_matches):
+                        amazon_account = match['amazon_account']
+                        amazon_orderid = match['amazon_orderid']
+                        score = match['match_score']
+                        days = match['days_difference']
+
+                        # Amazon tarihini al
+                        amazon_original_data = amazon_original.loc[match['amazon_idx']].to_dict()
+                        amazon_date = amazon_original_data.get('orderDate', 'N/A')
+
+                        print(f"      Option {i + 1}: {amazon_account} - {amazon_orderid}")
+                        print(f"                 Score: {score}%, Days: {days}, Date: {amazon_date}")
+
+                    # STEP 1: En düşük gün farkını bul (en yakın tarih)
                     min_days = min(match['days_difference'] for match in potential_matches)
                     closest_date_matches = [match for match in potential_matches if
                                             match['days_difference'] == min_days]
 
-                    print(f"   📅 Closest date matches ({min_days} days): {len(closest_date_matches)}")
+                    print(f"   🗓️  Closest date candidates ({min_days} days): {len(closest_date_matches)}")
 
                     if len(closest_date_matches) == 1:
+                        # Tek seçenek kaldı - tarih kriterine göre
                         best_match = closest_date_matches[0]
-                        print(f"   ✅ Selected by date: {best_match['amazon_account']} - {best_match['amazon_orderid']}")
+                        selection_reason = f"closest date ({min_days} days)"
                     else:
-                        # 2. Aynı tarihte birden fazla varsa, en yüksek score'u al
+                        # STEP 2: Aynı tarihte birden fazla varsa, en yüksek score'u al
                         best_match = max(closest_date_matches, key=lambda x: x['match_score'])
-                        print(
-                            f"   ✅ Selected by score: {best_match['amazon_account']} - {best_match['amazon_orderid']} (Score: {best_match['match_score']})")
+                        selection_reason = f"highest score among closest dates ({best_match['match_score']}%)"
 
-                    # Debug için diğer seçenekleri göster
-                    for i, match in enumerate(potential_matches):
-                        status = "✅ SELECTED" if match == best_match else "⏭️ Skipped"
-                        print(
-                            f"   {status} Option {i + 1}: {match['amazon_account']} - Days: {match['days_difference']}, Score: {match['match_score']}")
+                    # Final selection log
+                    print(f"   ✅ SELECTED: {best_match['amazon_account']} - {best_match['amazon_orderid']}")
+                    print(f"      Reason: {selection_reason}")
+                    print(f"      Final: Score {best_match['match_score']}%, {best_match['days_difference']} days")
+
+                    # Show what was rejected
+                    rejected = [m for m in potential_matches if m != best_match]
+                    for rej in rejected:
+                        reason = "worse date" if rej['days_difference'] > min_days else "lower score"
+                        print(f"   ❌ Rejected: {rej['amazon_account']} - {reason}")
 
                 # Mark as used BEFORE creating record
                 used_amazon_orders.add(best_match['amazon_composite_key'])
 
-                # Record creation (existing code continues...)
+                # Record creation
                 selected_amazon_idx = best_match['amazon_idx']
-                # ... rest of the code remains the same
-            # Record creation
-            selected_amazon_idx = best_match['amazon_idx']
-            ebay_original_data = ebay_original.loc[ebay_idx].to_dict()
-            amazon_original_data = amazon_original.loc[selected_amazon_idx].to_dict()
+                ebay_original_data = ebay_original.loc[ebay_idx].to_dict()
+                amazon_original_data = amazon_original.loc[selected_amazon_idx].to_dict()
 
-            match_record = self.create_match_record_with_international(
-                ebay_original_data,
-                amazon_original_data,
-                best_match['match_details'],
-                match_counter,
-                exclude_fields=exclude_fields
-            )
+                match_record = self.create_match_record_with_international(
+                    ebay_original_data,
+                    amazon_original_data,
+                    best_match['match_details'],
+                    match_counter,
+                    exclude_fields=exclude_fields
+                )
 
-            matches.append(match_record)
-            match_counter += 1
+                matches.append(match_record)
+                match_counter += 1
 
-            # Match type tracking
-            match_method = best_match['match_details'].get('match_method', 'standard')
-            account_name = amazon_original_data.get('amazon_account', 'unknown')
+                # Match type tracking
+                match_method = best_match['match_details'].get('match_method', 'standard')
+                account_name = amazon_original_data.get('amazon_account', 'unknown')
 
-            if match_method == 'eis_co_international':
-                international_matches += 1
-            else:
-                domestic_matches += 1
+                if match_method == 'eis_co_international':
+                    international_matches += 1
+                else:
+                    domestic_matches += 1
+
+                # Edwin özel log
+                if 'edwin' in ebay_buyer.lower():
+                    print(f"🎯 EDWIN FINAL MATCH:")
+                    print(f"   eBay: {ebay_order_num} - {ebay_date}")
+                    print(
+                        f"   Amazon: {amazon_original_data.get('orderId')} - {amazon_original_data.get('orderDate')} ({account_name})")
+                    print(f"   Days difference: {best_match['days_difference']}")
+                    print(f"   Match score: {best_match['match_score']}%")
 
         # Final statistics
         total_successful_matches = len(matches)
