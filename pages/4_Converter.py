@@ -226,27 +226,60 @@ def main():
                             if st.button("🔗 Order Matcher'a Git", type="secondary"):
                                 st.switch_page("pages/2_Order_Matcher.py")
 
-                # DOWNLOAD FILES (eğer seçiliyse) - OTOMATIK TEK SEFERDE
+                # DOWNLOAD FILES (eğer seçiliyse) - STATE KORUMALI
                 if download_files and successful:
-                    st.markdown("### 📄 Otomatik İndirme")
+                    st.markdown("### 📄 Dosya İndirme")
 
-                    # Her dosya için manual download butonu (JavaScript çalışmazsa)
-                    st.info("📋 Aşağıdaki dosyaları tek tek indirin:")
+                    # Processed files'ı session state'e kaydet
+                    st.session_state.download_ready_files = processed_files
+                    st.session_state.download_timestamp = datetime.now().strftime('%H%M%S')
+
+                    st.info("📋 Aşağıdaki dosyaları istediğiniz sırayla indirin:")
 
                     for i, (original_name, json_filename, json_data, error) in enumerate(processed_files):
                         if not error:
                             file_size = format_file_size(len(json_data.encode('utf-8')))
 
-                            # Büyük download butonu
+                            # Stable key ile download butonu
                             st.download_button(
                                 label=f"📄 {json_filename} ({file_size}) - İNDİR",
                                 data=json_data,
                                 file_name=json_filename,
                                 mime="application/json",
-                                key=f"manual_download_{i}_{datetime.now().strftime('%H%M%S')}",
+                                key=f"stable_download_{i}_{st.session_state.download_timestamp}",
                                 type="primary",
                                 use_container_width=True
                             )
+
+    # PERSISTENT DOWNLOAD SECTION (sayfa refresh'te bile kalır)
+    if 'download_ready_files' in st.session_state and st.session_state.download_ready_files:
+        st.markdown("---")
+        st.markdown("### 📄 İndirmeye Hazır Dosyalar")
+        st.info("📋 Bu dosyalar indirmeye hazır (sayfa yenilenince de kalır):")
+
+        for i, (original_name, json_filename, json_data, error) in enumerate(st.session_state.download_ready_files):
+            if not error:
+                file_size = format_file_size(len(json_data.encode('utf-8')))
+
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.write(f"📄 **{json_filename}** ({file_size})")
+                with col2:
+                    st.download_button(
+                        label="💾 İndir",
+                        data=json_data,
+                        file_name=json_filename,
+                        mime="application/json",
+                        key=f"persistent_download_{i}_{st.session_state.get('download_timestamp', '000')}",
+                        type="secondary"
+                    )
+
+        # Temizleme butonu
+        if st.button("🗑️ İndirme Listesini Temizle", type="secondary"):
+            del st.session_state.download_ready_files
+            if 'download_timestamp' in st.session_state:
+                del st.session_state.download_timestamp
+            st.rerun()
 
     # USAGE INSTRUCTIONS
     with st.expander("❓ Hızlı Yardım"):
