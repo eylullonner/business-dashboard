@@ -169,7 +169,7 @@ def main():
         with col3:
             st.metric("🕒 Yükleme Zamanı", datetime.now().strftime("%H:%M:%S"))
         with col4:
-            st.metric("🔄 Durum", "Dönüştürmeye Hazır")
+            st.metric("🔄 Durum", "Hazır")
 
         # File list preview
         with st.expander("🔍 Dosya Listesi Önizlemesi"):
@@ -213,18 +213,6 @@ def main():
                 successful = [f for f in processed_files if not f[3]]
                 failed = [f for f in processed_files if f[3]]
 
-                st.success(f"✅ Batch conversion completed!")
-
-                # Results summary
-                col1, col2, col3 = st.columns(3)
-
-                with col1:
-                    st.metric("✅ Successful", len(successful))
-                with col2:
-                    st.metric("❌ Failed", len(failed))
-                with col3:
-                    total_records = sum(len(json.loads(f[2])) for f in successful)
-                    st.metric("📋 Total Records", total_records)
 
     if st.button("🔄 Convert All Files to JSON", type="primary", use_container_width=True):
 
@@ -270,10 +258,6 @@ def main():
     # Alt bilgi
     st.markdown("---")
     st.markdown("""
-    <div style='text-align: center; color: #666;'>
-    🔒 <strong>Privacy Guarantee:</strong> All processing is done locally. Files are not stored on servers.<br>
-    🚀 <strong>Enhanced Workflow:</strong> Seamless integration with Order Matcher for complete automation.
-    </div>
     """, unsafe_allow_html=True)
 
 
