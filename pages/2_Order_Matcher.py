@@ -7,6 +7,8 @@ from typing import Dict, List, Tuple, Optional
 import warnings
 import sys
 import os
+from collections import defaultdict
+from typing import List, Dict, Tuple
 
 # DEPLOY-SAFE IMPORT - Hem local hem Streamlit Cloud için
 try:
@@ -97,6 +99,181 @@ class DropshippingMatcher:
 
     # ========== UTILITY FUNCTIONS ==========
 
+    def has_refund_amount(self, order: Dict) -> bool:
+        """Check if order has refund amount"""
+        try:
+            refund = order.get('Refunds') or order.get('refunds') or 0
+            if refund in [None, '', 'null', 'NULL']:
+                return False
+            refund_amount = float(refund)
+            return refund_amount > 0
+        except (ValueError, TypeError):
+            return False
+
+    def detect_critical_refund_cases(self, ebay_orders: List[Dict], amazon_orders: List[Dict]) -> List[Dict]:
+        """
+        Detect critical cases: Same buyer + Same product + 1 refund + 1 normal + Limited Amazon
+        """
+        # Group eBay orders by buyer name + product signature
+        grouped_ebay = defaultdict(list)
+
+        for order in ebay_orders:
+            buyer_name = order.get('Buyer name', '').strip()
+            product_title = order.get('Item title', '')[:50]  # Product signature
+
+            if buyer_name and product_title:
+                key = (buyer_name.lower(), product_title.lower())
+                grouped_ebay[key].append(order)
+
+        critical_cases = []
+
+        for (buyer, product), orders in grouped_ebay.items():
+            if len(orders) == 2:  # Exactly 2 eBay orders
+                refund_orders = [o for o in orders if self.has_refund_amount(o)]
+                normal_orders = [o for o in orders if not self.has_refund_amount(o)]
+
+                if len(refund_orders) == 1 and len(normal_orders) == 1:
+                    # Check potential Amazon matches for this buyer
+                    matching_amazon_count = self.count_potential_amazon_matches(
+                        buyer, product, amazon_orders
+                    )
+
+                    if matching_amazon_count == 1:  # Critical case!
+                        critical_case = {
+                            'buyer_name': refund_orders[0].get('Buyer name', ''),
+                            'product_signature': product,
+                            'normal_order': normal_orders[0],
+                            'refund_order': refund_orders[0],
+                            'amazon_matches': matching_amazon_count
+                        }
+                        critical_cases.append(critical_case)
+
+                        print(f"🚨 CRITICAL CASE DETECTED:")
+                        print(f"   Buyer: {critical_case['buyer_name']}")
+                        print(f"   Product: {product[:30]}...")
+                        print(f"   Normal Order: {normal_orders[0].get('Order number', 'N/A')}")
+                        print(f"   Refund Order: {refund_orders[0].get('Order number', 'N/A')}")
+                        print(f"   Available Amazon: {matching_amazon_count}")
+
+        return critical_cases
+
+    def count_potential_amazon_matches(self, buyer_name: str, product_signature: str,
+                                       amazon_orders: List[Dict]) -> int:
+        """Count how many Amazon orders could potentially match this buyer+product"""
+        potential_matches = 0
+
+        for amazon_order in amazon_orders:
+            # Extract Amazon address for name matching
+            amazon_address = self.extract_amazon_address_simple(amazon_order)
+
+            if amazon_address:
+                # Simple name similarity check
+                name_similarity = self.simple_name_check(buyer_name, amazon_address)
+
+                if name_similarity > 60:  # Potential match threshold
+                    potential_matches += 1
+
+        return potential_matches
+
+    def extract_amazon_address_simple(self, amazon_order: Dict) -> str:
+        """Simple Amazon address extraction for counting"""
+        if 'shippingAddress' in amazon_order:
+            shipping = amazon_order['shippingAddress']
+            if isinstance(shipping, dict):
+                return shipping.get('name', '') + ' ' + shipping.get('fullAddress', '')
+        return str(amazon_order.get('ship_to', ''))
+
+    def simple_name_check(self, ebay_name: str, amazon_address: str) -> int:
+        """Simple name similarity for counting potential matches"""
+        if not ebay_name or not amazon_address:
+            return 0
+
+        ebay_clean = ebay_name.lower().strip()
+        amazon_clean = amazon_address.lower().strip()
+
+        # Simple substring check
+        if ebay_clean in amazon_clean:
+            return 100
+
+        # Word matching
+        ebay_words = set(ebay_clean.split())
+        amazon_words = set(amazon_clean.split())
+
+        if ebay_words and amazon_words:
+            common_words = ebay_words.intersection(amazon_words)
+            similarity = (len(common_words) / len(ebay_words)) * 100
+            return int(similarity)
+
+        return 0
+
+    def prioritize_orders_by_critical_cases(self, ebay_orders: List[Dict],
+                                            critical_cases: List[Dict]) -> List[Dict]:
+        """
+        Reorder eBay orders to prioritize normal orders in critical cases
+        """
+        priority_orders = []
+        regular_orders = []
+
+        # Extract critical normal orders for priority
+        critical_normal_order_numbers = set()
+        for case in critical_cases:
+            critical_normal_order_numbers.add(case['normal_order'].get('Order number', ''))
+
+        for order in ebay_orders:
+            order_number = order.get('Order number', '')
+
+            if order_number in critical_normal_order_numbers:
+                priority_orders.append(order)  # Process first
+                print(f"🎯 PRIORITIZED: {order_number} (critical normal order)")
+            else:
+                regular_orders.append(order)  # Process later
+
+        return priority_orders + regular_orders
+
+    def generate_critical_case_notifications(self, critical_cases: List[Dict],
+                                             matches: List[Dict]) -> List[Dict]:
+        """
+        Generate user notifications for critical cases
+        """
+        notifications = []
+
+        for case in critical_cases:
+            normal_order_num = case['normal_order'].get('Order number', 'N/A')
+            refund_order_num = case['refund_order'].get('Order number', 'N/A')
+
+            # Check if normal order was actually matched
+            normal_matched = any(
+                match.get('ebay_order_number') == normal_order_num
+                for match in matches
+            )
+
+            # Check if refund order was matched (should be rare)
+            refund_matched = any(
+                match.get('ebay_order_number') == refund_order_num
+                for match in matches
+            )
+
+            notification = {
+                'type': 'critical_case_priority',
+                'buyer_name': case['buyer_name'],
+                'product': case['product_signature'][:50] + ('...' if len(case['product_signature']) > 50 else ''),
+                'normal_order': normal_order_num,
+                'refund_order': refund_order_num,
+                'normal_matched': normal_matched,
+                'refund_matched': refund_matched,
+                'action_taken': f"Normal order {normal_order_num} prioritized over refund order {refund_order_num}",
+                'reason': 'Limited Amazon inventory - Normal order takes priority',
+                'recommendation': 'Please review if refund order should be manually matched'
+            }
+
+            notifications.append(notification)
+
+            print(f"📢 NOTIFICATION GENERATED:")
+            print(f"   Buyer: {case['buyer_name']}")
+            print(f"   Normal: {normal_order_num} ({'✅ Matched' if normal_matched else '❌ Not Matched'})")
+            print(f"   Refund: {refund_order_num} ({'✅ Matched' if refund_matched else '❌ Not Matched'})")
+
+        return notifications
     def find_best_match_in_address_enhanced(self, search_term: str, address: str) -> int:
         """
         Geliştirilmiş adres içinde isim arama
@@ -118,7 +295,7 @@ class DropshippingMatcher:
         best_score = 0
 
         for word in address_words:
-            if word and len(word) >= 2:
+            if word and len(word) >= 4:
                 score = enhanced_fuzzy_name_match(search_term, word)
                 if score > best_score:
                     best_score = score
@@ -595,22 +772,22 @@ class DropshippingMatcher:
         # STEP 2: Fallback to normal domestic matching
         return self.calculate_match_score_enhanced(ebay_order, amazon_order)
 
+    # pages/2_Order_Matcher.py - calculate_match_score_enhanced fonksiyonunda değişiklik
+
     def calculate_match_score_enhanced(self, ebay_order: Dict, amazon_order: Dict) -> Dict:
-        """Eşleştirme skorunu hesapla - Geliştirilmiş address handling"""
+        """
+        Enhanced matching with HYBRID approach - Smart selection between normal and enhanced
+        """
         amazon_address = ""
 
-        # 1. Önce full_address field'ına bak
+        # Address extraction (existing logic)
         if 'full_address' in amazon_order and pd.notna(amazon_order['full_address']) and amazon_order['full_address']:
             amazon_address = str(amazon_order['full_address'])
-
-        # 2. full_address yoksa shippingAddress object'inden oluştur
         elif 'shippingAddress' in amazon_order and pd.notna(amazon_order['shippingAddress']):
             shipping_obj = amazon_order['shippingAddress']
             address_parts = self.extract_address_from_shipping_object(shipping_obj)
             if address_parts:
                 amazon_address = self.build_full_address_string(address_parts)
-
-        # 3. Son çare: mevcut field'ları birleştir
         else:
             address_parts = [
                 str(amazon_order.get('buyer_name', '')),
@@ -628,6 +805,75 @@ class DropshippingMatcher:
                 'days_difference': 999,
                 'date_status': 'no_address'
             }
+
+        # HYBRID NAME MATCHING - Punctuation based selection
+        ebay_buyer_name = ebay_order.get('buyer_name', '')
+
+        # Check if name contains any punctuation marks
+        has_punctuation = any(char in ebay_buyer_name for char in ['.', '-', "'", '"', '/', '&'])
+
+        if has_punctuation:
+            # Use enhanced matching for names with punctuation (R. Wood, Mary-Jane, O'Connor, etc.)
+            name_score = self.find_best_match_in_address_enhanced(
+                ebay_buyer_name, amazon_address)
+            matching_method = "Enhanced"
+            print(f"🔧 Enhanced matching used for: '{ebay_buyer_name}' (contains punctuation)")
+        else:
+            # Use normal matching for simple names (Chris Jones, Edwin Knowles, etc.)
+            name_score = self.find_best_match_in_address(
+                ebay_buyer_name, amazon_address)
+            matching_method = "Normal"
+            print(f"🔧 Normal matching used for: '{ebay_buyer_name}' (no punctuation)")
+
+        # Rest of the scoring (unchanged)
+        city_score = self.find_best_match_in_address(
+            ebay_order.get('ship_city', ''), amazon_address)
+        state_score = self.match_state(
+            ebay_order.get('ship_state', ''), amazon_address)
+        zip_score = self.match_zip_code(
+            ebay_order.get('ship_zip', ''), amazon_address)
+
+        # Product title matching
+        title_score = self.calculate_title_similarity(
+            ebay_order.get('item_title', ''),
+            amazon_order.get('item_title', '')
+        )
+
+        # Date validation
+        date_valid, date_info, days_diff = self.check_date_logic(
+            ebay_order.get('order_date', ''),
+            amazon_order.get('order_date', '')
+        )
+
+        # Weighted score calculation
+        total_score = (
+                name_score * self.weights['name'] +
+                city_score * self.weights['city'] +
+                state_score * self.weights['state'] +
+                zip_score * self.weights['zip'] +
+                title_score * self.weights['title']
+        )
+
+        # Final decision
+        is_match = total_score >= self.threshold and date_valid
+
+        # Enhanced debug for hybrid system
+        if 'chris' in str(ebay_buyer_name).lower() or 'wood' in str(ebay_buyer_name).lower():
+            print(f"🎯 HYBRID DEBUG - {ebay_buyer_name}:")
+            print(f"   Method: {matching_method}")
+            print(f"   Name Score: {name_score}")
+            print(f"   Total Score: {total_score:.1f}")
+            print(f"   Is Match: {is_match}")
+            print(f"   Amazon Address: {amazon_address[:50]}...")
+
+        return {
+            'total_score': round(total_score, 1),
+            'is_match': is_match,
+            'days_difference': days_diff,
+            'date_status': date_info,
+            'matching_method': matching_method,  # Debug için
+            'name_score_detail': name_score  # Debug için
+        }
 
         # Adres eşleştirmesi
         name_score = self.find_best_match_in_address_enhanced(
