@@ -148,12 +148,7 @@ class DropshippingMatcher:
                         }
                         critical_cases.append(critical_case)
 
-                        print(f"🚨 CRITICAL CASE DETECTED:")
-                        print(f"   Buyer: {critical_case['buyer_name']}")
-                        print(f"   Product: {product[:30]}...")
-                        print(f"   Normal Order: {normal_orders[0].get('Order number', 'N/A')}")
-                        print(f"   Refund Order: {refund_orders[0].get('Order number', 'N/A')}")
-                        print(f"   Available Amazon: {matching_amazon_count}")
+
 
         return critical_cases
 
@@ -224,7 +219,6 @@ class DropshippingMatcher:
 
             if order_number in critical_normal_order_numbers:
                 priority_orders.append(order)  # Process first
-                print(f"🎯 PRIORITIZED: {order_number} (critical normal order)")
             else:
                 regular_orders.append(order)  # Process later
 
@@ -267,11 +261,6 @@ class DropshippingMatcher:
             }
 
             notifications.append(notification)
-
-            print(f"📢 NOTIFICATION GENERATED:")
-            print(f"   Buyer: {case['buyer_name']}")
-            print(f"   Normal: {normal_order_num} ({'✅ Matched' if normal_matched else '❌ Not Matched'})")
-            print(f"   Refund: {refund_order_num} ({'✅ Matched' if refund_matched else '❌ Not Matched'})")
 
         return notifications
     def find_best_match_in_address_enhanced(self, search_term: str, address: str) -> int:
@@ -755,7 +744,6 @@ class DropshippingMatcher:
             if 'eIS CO' in amazon_name:
                 ebay_buyer = ebay_order.get('buyer_name', 'N/A')
                 ebay_country = ebay_order.get('ship_country', 'N/A')
-                print(f"🌍 TRYING eIS CO: Amazon='{amazon_name}' vs eBay='{ebay_buyer}' (Country: {ebay_country})")
 
         # STEP 1: Try international matching first
         international_result = self.international_matcher.calculate_international_match_score(
@@ -817,13 +805,12 @@ class DropshippingMatcher:
             name_score = self.find_best_match_in_address_enhanced(
                 ebay_buyer_name, amazon_address)
             matching_method = "Enhanced"
-            print(f"🔧 Enhanced matching used for: '{ebay_buyer_name}' (contains punctuation)")
         else:
             # Use normal matching for simple names (Chris Jones, Edwin Knowles, etc.)
             name_score = self.find_best_match_in_address(
                 ebay_buyer_name, amazon_address)
             matching_method = "Normal"
-            print(f"🔧 Normal matching used for: '{ebay_buyer_name}' (no punctuation)")
+
 
         # Rest of the scoring (unchanged)
         city_score = self.find_best_match_in_address(
@@ -858,14 +845,6 @@ class DropshippingMatcher:
         is_match = total_score >= self.threshold and date_valid
 
         # Enhanced debug for hybrid system
-        if 'chris' in str(ebay_buyer_name).lower() or 'wood' in str(ebay_buyer_name).lower():
-            print(f"🎯 HYBRID DEBUG - {ebay_buyer_name}:")
-            print(f"   Method: {matching_method}")
-            print(f"   Name Score: {name_score}")
-            print(f"   Total Score: {total_score:.1f}")
-            print(f"   Is Match: {is_match}")
-            print(f"   Amazon Address: {amazon_address[:50]}...")
-
         return {
             'total_score': round(total_score, 1),
             'is_match': is_match,
@@ -954,10 +933,6 @@ class DropshippingMatcher:
 
             # Birleştir
             combined_df = pd.concat([combined_df, amazon_df_copy], ignore_index=True)
-
-            print(f"DEBUG - Added {len(amazon_df)} records from {filename} (account: {account_name})")
-
-        print(f"DEBUG - Combined total: {len(combined_df)} Amazon records from {len(amazon_files_data)} accounts")
         return combined_df
 
     def combine_ebay_files(self, ebay_files_data: List[Tuple[str, pd.DataFrame]]) -> pd.DataFrame:
@@ -1038,7 +1013,7 @@ class DropshippingMatcher:
             match_record['amazon_account'] = amazon_data['amazon_account']
 
         # DEBUG: Amazon products kontrol
-        print(f"DEBUG - amazon_data keys: {list(amazon_data.keys())}")
+
         if 'products' in amazon_data:
             print(f"DEBUG - Found 'products': {amazon_data['products']}")
         if 'amazon_products' in match_record:
@@ -1176,29 +1151,12 @@ class DropshippingMatcher:
         if amazon_mapping is None:
             amazon_mapping = self.auto_detect_columns(amazon_combined_df, 'amazon')
 
-        print("🔍 RAW DATA KONTROL:")
-        jose_raw = ebay_df[ebay_df['Buyer name'].str.contains('Jose', na=False, case=False)]
-        print(f"Raw eBay'de Jose: {len(jose_raw)} records")
-        if len(jose_raw) > 0:
-            print(f"Jose raw data: '{jose_raw.iloc[0]['Buyer name']}'")
-
-        eis_raw = amazon_combined_df[amazon_combined_df['shippingAddress'].apply(
-            lambda x: 'eIS CO' in str(x.get('name', '')) if isinstance(x, dict) else False
-        )]
-        print(f"Raw Amazon'da eIS CO: {len(eis_raw)} records")
 
         # Veriyi normalize et
         ebay_normalized = self.normalize_data(ebay_df, ebay_mapping, 'ebay')
         amazon_normalized = self.normalize_data(amazon_combined_df, amazon_mapping, 'amazon')
 
-        print("🔍 NORMALIZED DATA KONTROL:")
-        jose_norm = ebay_normalized[ebay_normalized['buyer_name'].str.contains('Jose', na=False, case=False)]
-        print(f"Normalized eBay'de Jose: {len(jose_norm)} records")
-        if len(jose_norm) > 0:
-            print(f"Jose normalized data: '{jose_norm.iloc[0]['buyer_name']}'")
-            print(f"Jose index: {jose_norm.index[0]}")
-        else:
-            print("❌ JOSE NORMALIZATION'DA KAYBOLDU!")
+
 
         # Orijinal veri
         ebay_original = ebay_df.copy()
@@ -1210,53 +1168,12 @@ class DropshippingMatcher:
         domestic_matches = 0
         used_amazon_orders = set()  # YENİ SATIR - Duplicate control
 
-        print(f"🔍 EŞLEŞTIRME BAŞLIYOR: {len(ebay_normalized)} eBay vs {len(amazon_normalized)} Amazon")
 
         # Her eBay siparişi için eşleştirme yap
         for ebay_idx, ebay_order in ebay_normalized.iterrows():
             ebay_order_dict = ebay_order.to_dict()
 
-            # JOSE GONZALEZ ÖZEL DEBUG
-            if 'jose' in str(ebay_order_dict.get('buyer_name', '')).lower():
-                print(f"\n🎯 JOSE GONZALEZ BULUNDU! Index: {ebay_idx}")
-                print(f"   eBay Buyer: '{ebay_order_dict.get('buyer_name', 'N/A')}'")
-                print(f"   eBay Ürün: '{ebay_order_dict.get('item_title', 'N/A')}'")
-                print(f"   eBay Tarih: '{ebay_order_dict.get('order_date', 'N/A')}'")
 
-                potansiyel_sayisi = 0
-                eis_co_deneme = 0
-
-
-
-                for amazon_idx, amazon_order in amazon_normalized.iterrows():
-                    amazon_dict = amazon_order.to_dict()
-
-                    # eIS CO kontrol
-                    shipping_addr = amazon_dict.get('shippingAddress', {})
-                    if isinstance(shipping_addr, dict):
-                        amazon_name = shipping_addr.get('name', '')
-                        if 'eIS CO' in str(amazon_name) and 'jose' in str(amazon_name).lower():
-                            eis_co_deneme += 1
-                            print(f"   🌍 eIS CO José #{eis_co_deneme} ile denendi:")
-                            print(f"      Amazon Name: '{amazon_name}'")
-                            print(f"      Amazon Ürün: '{amazon_dict.get('item_title', 'N/A')}'")
-                            print(f"      Amazon Tarih: '{amazon_dict.get('order_date', 'N/A')}'")
-
-                            # Match score hesapla
-                            match_result = self.calculate_match_score_with_international(
-                                ebay_order_dict, amazon_dict
-                            )
-
-                            print(f"      Match Score: {match_result['total_score']}")
-                            print(f"      Is Match: {match_result['is_match']}")
-                            print(f"      Match Method: {match_result.get('match_method', 'N/A')}")
-
-                            if match_result['is_match']:
-                                potansiyel_sayisi += 1
-
-                print(f"   📊 Jose için eIS CO deneme sayısı: {eis_co_deneme}")
-                print(f"   📊 Jose için toplam potansiyel eşleşme: {potansiyel_sayisi}")
-                print(f"🎯 JOSE GONZALEZ DEBUG BİTTİ\n")
 
             if progress_callback:
                 progress_callback(ebay_idx + 1, len(ebay_normalized),
@@ -1383,63 +1300,97 @@ class DropshippingMatcher:
                 else:
                     domestic_matches += 1
 
-                # Edwin özel log
-                if 'edwin' in ebay_buyer.lower():
-                    print(f"🎯 EDWIN FINAL MATCH:")
-                    print(f"   eBay: {ebay_order_num} - {ebay_date}")
-                    print(
-                        f"   Amazon: {amazon_original_data.get('orderId')} - {amazon_original_data.get('orderDate')} ({account_name})")
-                    print(f"   Days difference: {best_match['days_difference']}")
-                    print(f"   Match score: {best_match['match_score']}%")
-
-        # Final statistics
-        total_successful_matches = len(matches)
-        print(f"\nDEBUG - Matching Summary:")
-        print(f"  📊 Total matches found: {total_successful_matches}")
-        print(f"  🏠 Domestic matches: {domestic_matches}")
-        print(f"  🌍 International (eIS CO) matches: {international_matches}")
-
-        if total_successful_matches > 0:
-            international_percentage = (international_matches / total_successful_matches) * 100
-            print(f"  📈 International percentage: {international_percentage:.1f}%")
-
-        # FINAL JOSE GONZALEZ DEBUG
-        print("\n" + "=" * 50)
-        print("🎯 JOSE GONZALEZ FINAL DURUMU:")
-        print("=" * 50)
-
-        # Jose Gonzalez eşleşti mi?
-        jose_matched = False
-        jose_match_info = None
-
-        for match in matches:
-            ebay_buyer = match.get('ebay_buyer_name', '')
-            if 'jose' in str(ebay_buyer).lower() and 'gonzalez' in str(ebay_buyer).lower():
-                jose_matched = True
-
-                amazon_ship_to = match.get('amazon_ship_to', '')
-                amazon_orderid = match.get('amazon_orderid', 'N/A')
-
-                if 'eIS CO' in str(amazon_ship_to):
-                    jose_match_info = f"🌍 eIS CO ile eşleşti! (Order: {amazon_orderid})"
-                else:
-                    jose_match_info = f"🏠 Normal sipariş ile eşleşti (Order: {amazon_orderid})"
-                break
-
-        if jose_matched:
-            print(f"✅ Jose Gonzalez EŞLEŞTİ: {jose_match_info}")
-        else:
-            print("❌ Jose Gonzalez EŞLEŞMEDİ!")
-
-        print("=" * 50)
-        print(f"📊 SONUÇ: {len(matches)} total matches")
-        print("=" * 50)
 
         return pd.DataFrame(matches)
 
 
 # ========== STREAMLIT UI ==========
+# ✅ EKLE: Converter integration için
+def show_converter_integration():
+    """Converter'dan gelen dosyaları göster ve entegre et"""
 
+    # Check if there are converted files from Converter page
+    if 'converted_ebay_files' in st.session_state and st.session_state.converted_ebay_files:
+
+        st.markdown("---")
+        st.markdown("### 🚀 Auto-Loaded Files from Converter")
+
+        converted_files = st.session_state.converted_ebay_files
+
+        # Summary info
+        total_files = len(converted_files)
+        total_records = sum(len(file_info['data']) for file_info in converted_files)
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric("📄 Auto-Loaded Files", total_files)
+        with col2:
+            st.metric("📊 Total Records", total_records)
+        with col3:
+            st.metric("🔄 Source", "Converter")
+
+        # File list with option to use
+        st.markdown("**Available Files:**")
+
+        selected_converter_files = []
+
+        for i, file_info in enumerate(converted_files):
+            col1, col2, col3, col4 = st.columns([3, 2, 1, 1])
+
+            with col1:
+                use_file = st.checkbox(
+                    f"📄 {file_info['filename']}",
+                    value=True,  # Default selected
+                    key=f"use_converter_file_{i}"
+                )
+
+                if use_file:
+                    selected_converter_files.append(file_info)
+
+            with col2:
+                st.caption(f"{len(file_info['data'])} records")
+
+            with col3:
+                st.caption(f"Converted: {file_info['converted_at']}")
+
+            with col4:
+                if st.button("🗑️", key=f"remove_converter_{i}", help="Remove from list"):
+                    st.session_state.converted_ebay_files.pop(i)
+                    st.rerun()
+
+        # Use selected files button
+        if selected_converter_files:
+            col1, col2 = st.columns(2)
+
+            with col1:
+                if st.button("✅ Use Selected Files", type="primary", use_container_width=True):
+                    # Convert to the format expected by the matcher
+                    ebay_files_data = []
+                    for file_info in selected_converter_files:
+                        # Create a DataFrame from the JSON data
+                        df = pd.DataFrame(file_info['data'])
+                        ebay_files_data.append((file_info['filename'], df))
+
+                    # Store in session state for the matcher
+                    st.session_state.ebay_files_data = ebay_files_data
+
+                    st.success(f"✅ {len(selected_converter_files)} files loaded for matching!")
+                    st.info("📍 Files are now ready in the eBay Orders section below.")
+
+                    # Clear converted files after use
+                    st.session_state.converted_ebay_files = []
+                    st.rerun()
+
+            with col2:
+                if st.button("🗑️ Clear All Auto-Loaded Files", type="secondary", use_container_width=True):
+                    st.session_state.converted_ebay_files = []
+                    st.rerun()
+
+        # Quick link back to converter
+        st.markdown("**Need to convert more CSV files?**")
+        if st.button("🔄 Go to Converter", type="secondary"):
+            st.switch_page("pages/4_Converter.py")
 def main():
     """Enhanced main function with international eIS CO support"""
     st.markdown("### 📊 Enhanced Multi-Amazon Account Support")
@@ -1452,12 +1403,19 @@ def main():
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown("#### 🏪 eBay Orders")
+            st.markdown("#### 🏪 eBay Orders - Enhanced with Converter Integration")
+
+            # 🆕 Converter Integration - ÖNCE BU
+            show_converter_integration()
+
+            # Manuel upload section - SONRA BU
+            st.markdown("**Or upload JSON files manually:**")
+
             ebay_files = st.file_uploader(
                 "Select eBay JSON files",
                 type=['json'],
                 key="ebay_upload",
-                help="Upload multiple eBay JSON files from different stores/periods",
+                help="Upload eBay JSON files or use auto-loaded files from Converter above",
                 accept_multiple_files=True
             )
 
@@ -1466,12 +1424,12 @@ def main():
                     ebay_files_data = []
                     total_ebay_orders = 0
 
-                    st.success(f"✅ {len(ebay_files)} eBay files uploaded")
+                    st.success(f"✅ {len(ebay_files)} eBay files uploaded manually")
 
                     for ebay_file in ebay_files:
                         ebay_data = json.loads(ebay_file.read())
 
-                        # JSON yapısını handle et (aynı logic)
+                        # JSON yapısını handle et (mevcut kod)
                         if isinstance(ebay_data, list):
                             ebay_df = pd.DataFrame(ebay_data)
                         elif isinstance(ebay_data, dict):
@@ -1496,7 +1454,7 @@ def main():
                     st.success(f"🎯 **Total: {total_ebay_orders} eBay orders from {len(ebay_files)} files**")
                     st.session_state.ebay_files_data = ebay_files_data
 
-                    # Kolon önizlemesi (ilk dosyadan)
+                    # Kolon önizlemesi (mevcut kod)
                     if ebay_files_data:
                         first_df = ebay_files_data[0][1]
                         with st.expander("🔍 eBay Columns"):
@@ -1508,6 +1466,19 @@ def main():
 
                 except Exception as e:
                     st.error(f"❌ eBay files could not be read: {e}")
+
+            # 🆕 Currently loaded files status
+            if 'ebay_files_data' in st.session_state:
+                ebay_files_data = st.session_state.ebay_files_data
+                total_loaded = sum(len(df) for _, df in ebay_files_data)
+
+                st.info(f"📊 **Currently Loaded:** {len(ebay_files_data)} files with {total_loaded} total eBay orders")
+
+                # Option to clear loaded files
+                if st.button("🗑️ Clear Currently Loaded eBay Files", type="secondary"):
+                    if 'ebay_files_data' in st.session_state:
+                        del st.session_state.ebay_files_data
+                    st.rerun()
 
         with col2:
             st.markdown("#### 📦 Amazon Orders (Multiple Accounts)")
@@ -1917,9 +1888,28 @@ def main():
 
     # Enhanced help section
     st.markdown("---")
-    with st.expander("❓ Enhanced Multi-Amazon Account & International eIS CO Support Help"):
+    with st.expander("❓ Enhanced Workflow with Converter Integration & Multi-Account Support"):
         st.markdown("""
-        **🚀 Enhanced Features:**
+        **🚀 Recommended Workflow with Converter Integration:**
+
+        **Step 1: Convert CSV Files** 
+        1. Go to **Converter** page
+        2. Upload multiple eBay CSV files
+        3. Enable "Auto-transfer to Order Matcher" 
+        4. Click "Convert All Files to JSON"
+        5. Files automatically appear here ✨
+
+        **Step 2: Order Matching (You're Here!)**
+        1. ✅ **Auto-loaded files** appear in "Auto-Loaded Files" section
+        2. Select which files to use for matching
+        3. Upload Amazon JSON files as usual
+        4. Configure matching settings  
+        5. Run enhanced matching process
+
+        **Step 3: Results & Analysis**
+        1. View matching results with profit analysis
+        2. Download matched orders as JSON/CSV
+        3. Transfer to Data Management if needed
 
         **🌍 International eIS CO Support:**
         - Automatically detects international orders routed through eIS CO warehouse
@@ -1927,21 +1917,23 @@ def main():
         - Separate thresholds for international vs domestic orders
         - Enhanced statistics showing domestic vs international breakdown
 
-        **✅ File Naming Convention:**
+        **✅ Multi-Amazon Account File Naming:**
         - **buyer1_amazon.json** → Account: "buyer1"
         - **seller3_orders.json** → Account: "seller3"  
 
-        **🔧 Enhanced Processing:**
-        - International pattern detection with high confidence matching
-        - eIS CO warehouse routing recognition
-        - Country-based order classification
-        - Detailed match method tracking
+        **🌟 Key Benefits:**
+        - **No Manual File Handling**: CSV→JSON→Matching seamlessly
+        - **Batch Processing**: Convert multiple CSVs at once
+        - **Auto-Integration**: Files flow automatically between pages
+        - **Session Memory**: Previously converted files remain available
+        - **Multi-Account Support**: Handle multiple Amazon accounts
+        - **International Detection**: eIS CO warehouse routing
+        - **Error Prevention**: No need to manually download/upload files
 
-        **📊 Enhanced Results:**
-        - International vs domestic match statistics
-        - eIS CO confidence levels
-        - Routing method indicators
-        - Account performance analysis
+        **🔄 Alternative Workflows:**
+        - **Manual Upload**: Upload JSON files directly (traditional method)
+        - **Mixed Mode**: Use both auto-loaded and manually uploaded files
+        - **Converter Only**: Just convert files without automatic transfer
         """)
 
     # 🔍 MISSING ORDERS ANALYSIS - DOWNLOAD BUTTONS'DAN ÖNCE EKLE
