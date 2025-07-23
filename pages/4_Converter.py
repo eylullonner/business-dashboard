@@ -228,81 +228,25 @@ def main():
 
                 # DOWNLOAD FILES (eğer seçiliyse) - OTOMATIK TEK SEFERDE
                 if download_files and successful:
-                    st.markdown("### 📄 Otomatik İndirme Başlatıldı")
+                    st.markdown("### 📄 Otomatik İndirme")
 
-                    # JavaScript ile otomatik download
-                    import base64
+                    # Her dosya için manual download butonu (JavaScript çalışmazsa)
+                    st.info("📋 Aşağıdaki dosyaları tek tek indirin:")
 
-                    download_script = "<script>"
                     for i, (original_name, json_filename, json_data, error) in enumerate(processed_files):
                         if not error:
-                            # Base64 encode
-                            b64_data = base64.b64encode(json_data.encode()).decode()
+                            file_size = format_file_size(len(json_data.encode('utf-8')))
 
-                            # Her dosya için otomatik download (1 saniye arayla)
-                            download_script += f"""
-                            setTimeout(function() {{
-                                var link = document.createElement('a');
-                                link.href = 'data:application/json;base64,{b64_data}';
-                                link.download = '{json_filename}';
-                                link.style.display = 'none';
-                                document.body.appendChild(link);
-                                link.click();
-                                document.body.removeChild(link);
-                                console.log('İndiriliyor: {json_filename}');
-                            }}, {i * 1200}); // Her dosya 1.2 saniye arayla
-                            """
-
-                    download_script += "</script>"
-
-                    # JavaScript'i çalıştır
-                    st.markdown(download_script, unsafe_allow_html=True)
-
-                    # Kullanıcı bilgilendirmesi
-                    st.success(f"✅ {len(successful)} dosya otomatik olarak indirilecek!")
-                    st.info("🔄 Dosyalar sırayla browser'ınıza indirilecek. İndirme izni isterse onaylayın.")
-
-                    # Dosya listesi (sadece bilgi için)
-                    with st.expander("📋 İndirilecek Dosyalar"):
-                        for i, (original_name, json_filename, json_data, error) in enumerate(processed_files):
-                            if not error:
-                                file_size = format_file_size(len(json_data.encode('utf-8')))
-                                delay = i * 1.2
-                                st.write(f"{i + 1}. **{json_filename}** ({file_size}) - {delay:.1f}s sonra")
-
-    # PREVIOUSLY CONVERTED FILES (eğer varsa)
-    if 'converted_ebay_files' in st.session_state and st.session_state.converted_ebay_files:
-        st.markdown("---")
-        st.markdown("### 📋 Önceden Dönüştürülen Dosyalar")
-        st.info(f"📊 {len(st.session_state.converted_ebay_files)} dosya Order Matcher'da hazır")
-
-        # Show converted files
-        for i, file_info in enumerate(st.session_state.converted_ebay_files):
-            col1, col2, col3 = st.columns([2, 1, 1])
-
-            with col1:
-                # Calculate file size
-                file_size_bytes = len(json.dumps(file_info['data']).encode('utf-8'))
-                file_size = format_file_size(file_size_bytes)
-                st.write(f"📄 **{file_info['filename']}** ({len(file_info['data'])} kayıt, {file_size})")
-
-            with col2:
-                st.caption(f"Dönüştürme: {file_info['converted_at']}")
-
-            with col3:
-                if st.button("🗑️", key=f"remove_{i}", help="Listeden kaldır"):
-                    st.session_state.converted_ebay_files.pop(i)
-                    st.rerun()
-
-        # Quick actions
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🚀 Order Matcher'a Git", type="primary", use_container_width=True):
-                st.switch_page("pages/2_Order_Matcher.py")
-        with col2:
-            if st.button("🗑️ Tümünü Temizle", type="secondary", use_container_width=True):
-                st.session_state.converted_ebay_files = []
-                st.rerun()
+                            # Büyük download butonu
+                            st.download_button(
+                                label=f"📄 {json_filename} ({file_size}) - İNDİR",
+                                data=json_data,
+                                file_name=json_filename,
+                                mime="application/json",
+                                key=f"manual_download_{i}_{datetime.now().strftime('%H%M%S')}",
+                                type="primary",
+                                use_container_width=True
+                            )
 
     # USAGE INSTRUCTIONS
     with st.expander("❓ Hızlı Yardım"):
