@@ -10,6 +10,15 @@ from typing import List, Tuple, Dict
 import base64
 
 
+# Bu fonksiyonu import'lardan hemen sonra ekle:
+def format_file_size(size_bytes):
+    """Convert bytes to human readable format"""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
 def convert_csv_to_json(uploaded_file):
     """
     Yüklenen CSV dosyasını JSON formatına dönüştürür
@@ -88,19 +97,6 @@ def process_multiple_csvs(uploaded_files) -> List[Tuple[str, str, str]]:
     return processed_files
 
 
-def create_zip_download(processed_files: List[Tuple]) -> bytes:
-    """Birden fazla JSON dosyasını ZIP içinde topla"""
-    zip_buffer = io.BytesIO()
-
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for original_name, json_filename, json_data, error in processed_files:
-            if not error:  # Sadece başarılı dönüşümleri ekle
-                zip_file.writestr(json_filename, json_data)
-
-    zip_buffer.seek(0)
-    return zip_buffer.getvalue()
-
-
 def auto_transfer_to_order_matcher(processed_files: List[Tuple]):
     """Convert edilmiş dosyaları Order Matcher'a otomatik transfer et"""
     if 'converted_ebay_files' not in st.session_state:
@@ -172,14 +168,17 @@ def main():
         st.markdown(f"### 📊 Upload Summary")
 
         total_size = sum(file.size for file in uploaded_files)
-        size_mb = total_size / (1024 * 1024)
+        if total_size < 1024 * 1024:  # Under 1MB
+            size_display = f"{total_size / 1024:.1f} KB"
+        else:
+            size_display = f"{total_size / (1024 * 1024):.1f} MB"
 
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             st.metric("📄 Files Selected", len(uploaded_files))
         with col2:
-            st.metric("📊 Total Size", f"{size_mb:.2f} MB")
+            st.metric("📊 Total Size", size_display)
         with col3:
             st.metric("🕒 Upload Time", datetime.now().strftime("%H:%M:%S"))
         with col4:
@@ -187,11 +186,17 @@ def main():
 
         # File list preview
         with st.expander("🔍 File List Preview"):
+            total_preview_size = 0
             for i, file in enumerate(uploaded_files, 1):
-                file_size_kb = file.size / 1024
-                st.write(f"{i}. **{file.name}** ({file_size_kb:.1f} KB)")
+                file_size = format_file_size(file.size)
+                total_preview_size += file.size
+                st.write(f"{i}. **{file.name}** ({file_size})")
 
-        # 🆕 PROCESSING OPTIONS
+            # Total size info
+            total_size_display = format_file_size(total_preview_size)
+            st.info(f"📊 Total size: {total_size_display}")
+
+        # Processing Options
         st.markdown("### ⚙️ Processing Options")
 
         col1, col2 = st.columns(2)
@@ -200,14 +205,14 @@ def main():
             auto_transfer = st.checkbox(
                 "🚀 Auto-transfer to Order Matcher",
                 value=True,
-                help="Automatically send converted files to Order Matcher upload area"
+                help="Automatically send converted files to Order Matcher"
             )
 
         with col2:
-            create_zip = st.checkbox(
-                "📦 Create ZIP download",
-                value=True,
-                help="Package all converted files into a single ZIP file"
+            download_files = st.checkbox(
+                "💾 Download converted files",
+                value=False,
+                help="Download all converted JSON files individually"
             )
 
         # 🆕 BATCH CONVERT BUTTON
@@ -252,56 +257,47 @@ def main():
                                 st.success(f"✅ Converted successfully: {record_count} records")
 
                                 # Preview first record
-                                if data:
-                                    st.markdown("**First Record Preview:**")
-                                    preview_data = data[0]
-                                    preview_items = list(preview_data.items())[:5]
+                                # File metrics
+                                try:
+                                    data = json.loads(json_data)
+                                    record_count = len(data)
+                                    file_size = format_file_size(len(json_data.encode('utf-8')))
+                                    st.success(f"✅ Converted successfully: {record_count} records, {file_size}")
 
-                                    for key, value in preview_items:
-                                        if value is not None:
-                                            st.text(f"{key}: {value}")
+                                    # Preview first record (simplified)
+                                    if data:
+                                        st.markdown("**Sample Record:**")
+                                        preview_data = data[0]
+                                        preview_items = list(preview_data.items())[:3]  # Only 3 fields
+                                        for key, value in preview_items:
+                                            if value is not None:
+                                                st.text(f"{key}: {value}")
+                                        if len(preview_data) > 3:
+                                            st.caption(f"... and {len(preview_data) - 3} more fields")
 
-                                    if len(preview_data) > 5:
-                                        st.info(f"... and {len(preview_data) - 5} more fields")
-
-                                # Individual download button
-                                st.download_button(
-                                    label=f"💾 Download {json_filename}",
-                                    data=json_data,
-                                    file_name=json_filename,
-                                    mime="application/json",
-                                    key=f"download_{json_filename}"
-                                )
+                                except Exception as e:
+                                    st.error(f"❌ JSON parsing error: {e}")
 
                             except Exception as e:
                                 st.error(f"❌ JSON parsing error: {e}")
 
                 # 🆕 BATCH DOWNLOAD OPTIONS
-                if successful:
+                # Individual Downloads (if requested)
+                if successful and download_files:
                     st.markdown("---")
-                    st.markdown("### 📦 Batch Download Options")
+                    st.markdown("### 📄 Download Files")
 
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-                        # ZIP Download
-                        if create_zip:
-                            zip_data = create_zip_download(processed_files)
-                            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                            zip_filename = f"converted_ebay_files_{timestamp}.zip"
-
+                    for original_name, json_filename, json_data, error in processed_files:
+                        if not error:  # Only successful files
+                            file_size = format_file_size(len(json_data.encode('utf-8')))
                             st.download_button(
-                                label="📦 Download All as ZIP",
-                                data=zip_data,
-                                file_name=zip_filename,
-                                mime="application/zip",
-                                type="primary",
+                                label=f"📄 {json_filename} ({file_size})",
+                                data=json_data,
+                                file_name=json_filename,
+                                mime="application/json",
+                                key=f"individual_download_{json_filename}",
                                 use_container_width=True
                             )
-
-                    with col2:
-                        # Individual files download info
-                        st.info(f"📄 {len(successful)} individual JSON files ready for download above")
 
                 # 🆕 AUTO-TRANSFER TO ORDER MATCHER
                 if auto_transfer and successful:
@@ -328,21 +324,6 @@ def main():
                     for original_name, _, _, error in failed:
                         st.error(f"**{original_name}**: {error}")
 
-                # 🆕 CLEANUP OPTIONS
-                st.markdown("---")
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    if st.button("🗑️ Clear All Data", type="secondary", use_container_width=True):
-                        # Clear session state
-                        if 'converted_ebay_files' in st.session_state:
-                            del st.session_state.converted_ebay_files
-                        st.rerun()
-
-                with col2:
-                    if st.button("🔄 Convert More Files", type="secondary", use_container_width=True):
-                        st.rerun()
-
     # 🆕 SHOW PRE-LOADED FILES (if any exist from previous conversions)
     if 'converted_ebay_files' in st.session_state and st.session_state.converted_ebay_files:
         st.markdown("---")
@@ -357,7 +338,10 @@ def main():
             col1, col2, col3 = st.columns([2, 1, 1])
 
             with col1:
-                st.write(f"📄 **{file_info['filename']}** ({len(file_info['data'])} records)")
+                # Calculate file size
+                file_size_bytes = len(json.dumps(file_info['data']).encode('utf-8'))
+                file_size = format_file_size(file_size_bytes)
+                st.write(f"📄 **{file_info['filename']}** ({len(file_info['data'])} records, {file_size})")
             with col2:
                 st.caption(f"Converted: {file_info['converted_at']}")
             with col3:
@@ -371,11 +355,6 @@ def main():
         with col1:
             if st.button("🚀 Transfer All to Order Matcher", type="primary", use_container_width=True):
                 st.switch_page("pages/2_Order_Matcher.py")
-
-        with col2:
-            if st.button("🗑️ Clear All Converted Files", type="secondary", use_container_width=True):
-                st.session_state.converted_ebay_files = []
-                st.rerun()
 
     # 🆕 USAGE INSTRUCTIONS
     with st.expander("📖 How to Use Multi-CSV Batch Converter"):
