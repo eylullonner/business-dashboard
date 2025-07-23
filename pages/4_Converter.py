@@ -226,28 +226,49 @@ def main():
                             if st.button("🔗 Order Matcher'a Git", type="secondary"):
                                 st.switch_page("pages/2_Order_Matcher.py")
 
-                # DOWNLOAD FILES (eğer seçiliyse)
+                # DOWNLOAD FILES (eğer seçiliyse) - OTOMATIK TEK SEFERDE
                 if download_files and successful:
-                    st.markdown("### 📄 Dosyaları İndir")
+                    st.markdown("### 📄 Otomatik İndirme Başlatıldı")
 
-                    # Her başarılı dosya için download butonu
-                    for original_name, json_filename, json_data, error in processed_files:
-                        if not error:  # Sadece başarılı dosyalar
-                            file_size = format_file_size(len(json_data.encode('utf-8')))
+                    # JavaScript ile otomatik download
+                    import base64
 
-                            col1, col2, col3 = st.columns([3, 1, 1])
-                            with col1:
-                                st.write(f"📄 **{json_filename}**")
-                            with col2:
-                                st.write(f"*{file_size}*")
-                            with col3:
-                                st.download_button(
-                                    label="💾 İndir",
-                                    data=json_data,
-                                    file_name=json_filename,
-                                    mime="application/json",
-                                    key=f"download_{json_filename}_{datetime.now().strftime('%H%M%S')}"
-                                )
+                    download_script = "<script>"
+                    for i, (original_name, json_filename, json_data, error) in enumerate(processed_files):
+                        if not error:
+                            # Base64 encode
+                            b64_data = base64.b64encode(json_data.encode()).decode()
+
+                            # Her dosya için otomatik download (1 saniye arayla)
+                            download_script += f"""
+                            setTimeout(function() {{
+                                var link = document.createElement('a');
+                                link.href = 'data:application/json;base64,{b64_data}';
+                                link.download = '{json_filename}';
+                                link.style.display = 'none';
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                                console.log('İndiriliyor: {json_filename}');
+                            }}, {i * 1200}); // Her dosya 1.2 saniye arayla
+                            """
+
+                    download_script += "</script>"
+
+                    # JavaScript'i çalıştır
+                    st.markdown(download_script, unsafe_allow_html=True)
+
+                    # Kullanıcı bilgilendirmesi
+                    st.success(f"✅ {len(successful)} dosya otomatik olarak indirilecek!")
+                    st.info("🔄 Dosyalar sırayla browser'ınıza indirilecek. İndirme izni isterse onaylayın.")
+
+                    # Dosya listesi (sadece bilgi için)
+                    with st.expander("📋 İndirilecek Dosyalar"):
+                        for i, (original_name, json_filename, json_data, error) in enumerate(processed_files):
+                            if not error:
+                                file_size = format_file_size(len(json_data.encode('utf-8')))
+                                delay = i * 1.2
+                                st.write(f"{i + 1}. **{json_filename}** ({file_size}) - {delay:.1f}s sonra")
 
     # PREVIOUSLY CONVERTED FILES (eğer varsa)
     if 'converted_ebay_files' in st.session_state and st.session_state.converted_ebay_files:
