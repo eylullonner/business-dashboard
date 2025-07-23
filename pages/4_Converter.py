@@ -202,10 +202,9 @@ def main():
             )
 
         # 🆕 BATCH CONVERT BUTTON
+        # BU KALACAK:
         if st.button("🔄 Tüm Dosyaları JSON'a Dönüştür", type="primary", use_container_width=True):
-
             with st.spinner("🔄 Birden fazla CSV dosyası işleniyor..."):
-
                 # Process all files
                 processed_files = process_multiple_csvs(uploaded_files)
 
@@ -213,36 +212,20 @@ def main():
                 successful = [f for f in processed_files if not f[3]]
                 failed = [f for f in processed_files if f[3]]
 
+                st.success(f"✅ Toplu dönüştürme tamamlandı!")
 
-    if st.button("🔄 Convert All Files to JSON", type="primary", use_container_width=True):
+                # Results summary
+                col1, col2, col3 = st.columns(3)
 
-        with st.spinner("🔄 Processing multiple CSV files..."):
+                with col1:
+                    st.metric("✅ Successful", len(successful))
+                with col2:
+                    st.metric("❌ Failed", len(failed))
+                with col3:
+                    total_records = sum(len(json.loads(f[2])) for f in successful)
+                    st.metric("📋 Total Records", total_records)
 
-            # Process all files
-            processed_files = process_multiple_csvs(uploaded_files)
 
-            # Count successful/failed conversions
-            successful = [f for f in processed_files if not f[3]]
-            failed = [f for f in processed_files if f[3]]
-
-            # SADECE BAŞARI MESAJI
-            if successful:
-                st.success(f"✅ {len(successful)} dosya başarıyla JSON'a dönüştürüldü!")
-
-            if failed:
-                st.error(f"❌ {len(failed)} dosya dönüştürülemedi")
-            # BACKGROUND İŞLEMLER (görünmez)
-
-            # Auto-transfer (sessizce)
-            if auto_transfer and successful:
-                auto_transfer_to_order_matcher(processed_files)
-
-            # Download files (sessizce - butonlar otomatik generate olur)
-            if download_files and successful:
-                for original_name, json_filename, json_data, error in processed_files:
-                    if not error:
-                        # Download button'lar otomatik oluşturulur
-                        pass
     # 🆕 USAGE INSTRUCTIONS
     with st.expander("❓ Hızlı Yardım"):
         st.markdown("""
