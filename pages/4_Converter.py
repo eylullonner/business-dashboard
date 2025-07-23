@@ -4,21 +4,20 @@ import csv
 import json
 import io
 import os
-import zipfile
 from datetime import datetime
 from typing import List, Tuple, Dict
-import base64
 
 
-# Bu fonksiyonu import'lardan hemen sonra ekle:
 def format_file_size(size_bytes):
-    """Convert bytes to human readable format"""
+    """Byte'ları okunabilir formata dönüştür"""
     if size_bytes < 1024:
         return f"{size_bytes} B"
     elif size_bytes < 1024 * 1024:
         return f"{size_bytes / 1024:.1f} KB"
     else:
         return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
 def convert_csv_to_json(uploaded_file):
     """
     Yüklenen CSV dosyasını JSON formatına dönüştürür
@@ -60,20 +59,13 @@ def convert_csv_to_json(uploaded_file):
         return data, None
 
     except Exception as e:
-        return None, str(e)
+        return None, f"Dosya işlenirken hata: {str(e)}"
 
 
-def create_download_link(json_data: str, filename: str) -> str:
-    """JSON dosyası için download link oluştur"""
-    b64 = base64.b64encode(json_data.encode()).decode()
-    href = f'<a href="data:application/json;base64,{b64}" download="{filename}">📄 Download {filename}</a>'
-    return href
-
-
-def process_multiple_csvs(uploaded_files) -> List[Tuple[str, str, str]]:
+def process_multiple_csvs(uploaded_files) -> List[Tuple[str, str, str, str]]:
     """
     Birden fazla CSV dosyasını işle
-    Returns: List of (original_filename, json_filename, json_data)
+    Returns: List of (original_filename, json_filename, json_data, error)
     """
     processed_files = []
 
@@ -88,7 +80,7 @@ def process_multiple_csvs(uploaded_files) -> List[Tuple[str, str, str]]:
         if error:
             # Hata varsa boş JSON ile ekle
             json_string = json.dumps([], ensure_ascii=False, indent=2)
-            processed_files.append((original_name, json_filename, json_string, f"Error: {error}"))
+            processed_files.append((original_name, json_filename, json_string, f"Hata: {error}"))
         else:
             # Başarılı dönüşüm
             json_string = json.dumps(json_data, ensure_ascii=False, indent=2)
@@ -103,6 +95,7 @@ def auto_transfer_to_order_matcher(processed_files: List[Tuple]):
         st.session_state.converted_ebay_files = []
 
     # Başarılı dönüşümleri session state'e ekle
+    transferred_count = 0
     for original_name, json_filename, json_data, error in processed_files:
         if not error:
             # JSON data'yı parse et
@@ -114,16 +107,17 @@ def auto_transfer_to_order_matcher(processed_files: List[Tuple]):
                     'data': parsed_data,
                     'converted_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 })
+                transferred_count += 1
             except:
                 continue
 
-    return len([f for f in processed_files if not f[3]])  # Error olmayan dosya sayısı
+    return transferred_count
 
 
 def main():
     """Ana sayfa fonksiyonu - ENHANCED MULTI-CSV BATCH PROCESSING"""
     st.set_page_config(
-        page_title="Enhanced CSV to JSON Converter",
+        page_title="CSV to JSON Dönüştürücü",
         page_icon="🔄",
         layout="wide"
     )
@@ -131,28 +125,26 @@ def main():
     # Başlık ve açıklama
     st.title("🔄 Gelişmiş Çoklu CSV Dönüştürücü")
     st.markdown("Bir veya daha fazla eBay CSV dosyasını JSON formatına dönüştürün")
+
     # Ana layout
-    col1, col2 = st.columns([2, 1])
+    st.markdown("""
+    ### 📁 Çoklu Dosya Yükleme
+    """)
 
-    with col1:
-        st.markdown("""
-        ### 📁 Çoklu Dosya Yükleme
-        """)
+    uploaded_files = st.file_uploader(
+        "Birden Fazla eBay CSV Dosyası Seçin",
+        type=['csv'],
+        help="Toplu işlem için birden fazla CSV dosyası seçin",
+        accept_multiple_files=True,
+        key="multi_csv_upload"
+    )
 
-        uploaded_files = st.file_uploader(
-            "Birden Fazla eBay CSV Dosyası Seçin",
-            type=['csv'],
-            help="Toplu işlem için birden fazla CSV dosyası seçin",
-            accept_multiple_files=True,
-            key="multi_csv_upload"
-        )
-
-    # 🆕 BATCH PROCESSING SECTION
+    # BATCH PROCESSING SECTION
     if uploaded_files:
         st.markdown("---")
 
         # File summary
-        st.markdown(f"### 📊 Yükleme Özeti")
+        st.markdown("### 📊 Yükleme Özeti")
 
         total_size = sum(file.size for file in uploaded_files)
         if total_size < 1024 * 1024:  # Under 1MB
@@ -201,10 +193,11 @@ def main():
                 help="Tüm dönüştürülen JSON dosyalarını tek tek indir"
             )
 
-        # 🆕 BATCH CONVERT BUTTON
-        # BU KALACAK:
+        # CONVERT BUTTON
         if st.button("🔄 Tüm Dosyaları JSON'a Dönüştür", type="primary", use_container_width=True):
+
             with st.spinner("🔄 Birden fazla CSV dosyası işleniyor..."):
+
                 # Process all files
                 processed_files = process_multiple_csvs(uploaded_files)
 
@@ -212,21 +205,85 @@ def main():
                 successful = [f for f in processed_files if not f[3]]
                 failed = [f for f in processed_files if f[3]]
 
-                st.success(f"✅ Toplu dönüştürme tamamlandı!")
+                # BAŞARI MESAJI
+                if successful:
+                    st.success(f"✅ {len(successful)} dosya başarıyla JSON'a dönüştürüldü!")
 
-                # Results summary
-                col1, col2, col3 = st.columns(3)
+                if failed:
+                    st.error(f"❌ {len(failed)} dosya dönüştürülemedi")
+                    # Hata detayları
+                    for original_name, _, _, error in failed:
+                        st.error(f"**{original_name}**: {error}")
 
-                with col1:
-                    st.metric("✅ Successful", len(successful))
-                with col2:
-                    st.metric("❌ Failed", len(failed))
-                with col3:
-                    total_records = sum(len(json.loads(f[2])) for f in successful)
-                    st.metric("📋 Total Records", total_records)
+                # AUTO-TRANSFER (sessizce çalışır)
+                if auto_transfer and successful:
+                    transferred_count = auto_transfer_to_order_matcher(processed_files)
+                    if transferred_count > 0:
+                        col1, col2 = st.columns([2, 1])
+                        with col1:
+                            st.info(f"🚀 {transferred_count} dosya Order Matcher'a transfer edildi!")
+                        with col2:
+                            if st.button("🔗 Order Matcher'a Git", type="secondary"):
+                                st.switch_page("pages/2_Order_Matcher.py")
 
+                # DOWNLOAD FILES (eğer seçiliyse)
+                if download_files and successful:
+                    st.markdown("### 📄 Dosyaları İndir")
 
-    # 🆕 USAGE INSTRUCTIONS
+                    # Her başarılı dosya için download butonu
+                    for original_name, json_filename, json_data, error in processed_files:
+                        if not error:  # Sadece başarılı dosyalar
+                            file_size = format_file_size(len(json_data.encode('utf-8')))
+
+                            col1, col2, col3 = st.columns([3, 1, 1])
+                            with col1:
+                                st.write(f"📄 **{json_filename}**")
+                            with col2:
+                                st.write(f"*{file_size}*")
+                            with col3:
+                                st.download_button(
+                                    label="💾 İndir",
+                                    data=json_data,
+                                    file_name=json_filename,
+                                    mime="application/json",
+                                    key=f"download_{json_filename}_{datetime.now().strftime('%H%M%S')}"
+                                )
+
+    # PREVIOUSLY CONVERTED FILES (eğer varsa)
+    if 'converted_ebay_files' in st.session_state and st.session_state.converted_ebay_files:
+        st.markdown("---")
+        st.markdown("### 📋 Önceden Dönüştürülen Dosyalar")
+        st.info(f"📊 {len(st.session_state.converted_ebay_files)} dosya Order Matcher'da hazır")
+
+        # Show converted files
+        for i, file_info in enumerate(st.session_state.converted_ebay_files):
+            col1, col2, col3 = st.columns([2, 1, 1])
+
+            with col1:
+                # Calculate file size
+                file_size_bytes = len(json.dumps(file_info['data']).encode('utf-8'))
+                file_size = format_file_size(file_size_bytes)
+                st.write(f"📄 **{file_info['filename']}** ({len(file_info['data'])} kayıt, {file_size})")
+
+            with col2:
+                st.caption(f"Dönüştürme: {file_info['converted_at']}")
+
+            with col3:
+                if st.button("🗑️", key=f"remove_{i}", help="Listeden kaldır"):
+                    st.session_state.converted_ebay_files.pop(i)
+                    st.rerun()
+
+        # Quick actions
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🚀 Order Matcher'a Git", type="primary", use_container_width=True):
+                st.switch_page("pages/2_Order_Matcher.py")
+        with col2:
+            if st.button("🗑️ Tümünü Temizle", type="secondary", use_container_width=True):
+                st.session_state.converted_ebay_files = []
+                st.rerun()
+
+    # USAGE INSTRUCTIONS
     with st.expander("❓ Hızlı Yardım"):
         st.markdown("""
         **Basit İş Akışı:**
@@ -237,11 +294,6 @@ def main():
 
         **Özellikler:** Toplu işleme • Otomatik entegrasyon • Gizlilik güvenli yerel işleme
         """)
-
-    # Alt bilgi
-    st.markdown("---")
-    st.markdown("""
-    """, unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
