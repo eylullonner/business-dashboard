@@ -130,14 +130,13 @@ def main():
 
     # Başlık ve açıklama
     st.title("🔄 Gelişmiş Çoklu CSV Dönüştürücü")
-    st.markdown("Birden fazla eBay CSV dosyasını JSON formatına dönüştürün ve otomatik Order Matcher entegrasyonu")
+    st.markdown("Bir veya daha fazla eBay CSV dosyasını JSON formatına dönüştürün")
     # Ana layout
     col1, col2 = st.columns([2, 1])
 
     with col1:
         st.markdown("""
         ### 📁 Çoklu Dosya Yükleme
-        Toplu işlem için birden fazla eBay CSV dosyası yükleyin.
         """)
 
         uploaded_files = st.file_uploader(
@@ -147,16 +146,6 @@ def main():
             accept_multiple_files=True,
             key="multi_csv_upload"
         )
-
-    with col2:
-        st.markdown("""
-        ### ✨ Gelişmiş Özellikler
-        - 🔄 **Çoklu CSV İşleme**
-        - 📦 **Bireysel JSON Çıktısı**  
-        - 🚀 **Otomatik Order Matcher Transferi**
-        - 📁 **Toplu İndirme**
-        - 🔒 **Gizlilik Korumalı**
-        """)
 
     # 🆕 BATCH PROCESSING SECTION
     if uploaded_files:
