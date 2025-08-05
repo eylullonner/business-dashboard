@@ -220,7 +220,7 @@ def main_dashboard_content():
         st.error(f"❌ Data processing error: {str(e)}")
         st.stop()
 
-    # Enhanced Filtering Section - UPDATED: Account filter dahil
+    # Enhanced Filtering Section - UPDATED: Multi-Account Filter
     st.subheader("🔍 Filters")
 
     col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
@@ -234,12 +234,29 @@ def main_dashboard_content():
             selected_date_filter = "All Time"
 
     with col2:
-        # Account filter - YENİ EKLENEN
+        # 🆕 MULTI-ACCOUNT FILTER
         if 'amazon_account' in df.columns:
-            unique_accounts = ['All Accounts'] + sorted(df['amazon_account'].unique().tolist())
-            selected_account = st.selectbox("🏪 Account Filter:", unique_accounts)
+            unique_accounts = sorted(df['amazon_account'].unique().tolist())
+
+            # Account selection mode
+            filter_mode = st.radio(
+                "🏪 Account Selection:",
+                ["All Accounts", "Select Multiple"],
+                horizontal=True
+            )
+
+            if filter_mode == "Select Multiple":
+                selected_accounts = st.multiselect(
+                    "Choose Accounts:",
+                    options=unique_accounts,
+                    default=unique_accounts[:3] if len(unique_accounts) >= 3 else unique_accounts,
+                    help="Select one or more accounts"
+                )
+            else:
+                selected_accounts = unique_accounts  # All selected
         else:
-            selected_account = "All Accounts"
+            filter_mode = "All Accounts"
+            selected_accounts = []
 
     # Date range selectors
     if selected_date_filter != "All Time":
@@ -263,10 +280,15 @@ def main_dashboard_content():
                 st.info(f"📅 Date filtered: {len(df_filtered)}/{len(df)} records")
                 df = df_filtered
 
-    # Apply account filter - YENİ EKLENEN
-    if selected_account != "All Accounts":
-        df = apply_account_filter(df, "specific_account", [selected_account])
-        st.info(f"🏪 Account filtered: {len(df)} records for **{selected_account}**")
+    # 🆕 Apply multi-account filter
+    if filter_mode == "Select Multiple" and selected_accounts:
+        df = df[df['amazon_account'].isin(selected_accounts)]
+        account_names = ", ".join(selected_accounts[:2])
+        if len(selected_accounts) > 2:
+            account_names += f" and {len(selected_accounts) - 2} more"
+        st.info(f"🏪 Account filtered: {len(df)} records for **{account_names}**")
+    elif filter_mode == "Select Multiple" and not selected_accounts:
+        st.warning("⚠️ No accounts selected. Showing all accounts.")
 
     # Business Metrics
     st.subheader("📈 Business Metrics")
@@ -287,8 +309,8 @@ def main_dashboard_content():
         col2.metric("❌ Loss Orders", metrics['loss_orders'])
         col3.metric("⚪ Breakeven", metrics['breakeven_orders'])
 
-        # Account breakdown - YENİ EKLENEN
-        if 'amazon_account' in df.columns and selected_account == "All Accounts":
+        # Account breakdown - FIXED
+        if 'amazon_account' in df.columns and filter_mode == "All Accounts":
             st.markdown("#### 🏪 Account Performance")
 
             account_breakdown = metrics.get('account_breakdown', {})
@@ -471,7 +493,7 @@ def main_dashboard_content():
 
     # =================== TOP PRODUCTS & DATA TABLE ===================
 
-    # En iyi ürünler - UPDATED: Account breakdown dahil
+    # En iyi ürünler - FIXED
     product_columns = [col for col in df.columns if any(keyword in col.lower()
                                                         for keyword in ['title', 'product', 'item', 'asin'])]
 
@@ -490,8 +512,8 @@ def main_dashboard_content():
 
         if product_col in df.columns and profit_col in df.columns:
             try:
-                # Group by product and optionally by account
-                if 'amazon_account' in df.columns and selected_account == "All Accounts":
+                # Group by product and optionally by account - FIXED
+                if 'amazon_account' in df.columns and filter_mode == "All Accounts":
                     # Show account breakdown for top products
                     top_products = df.groupby([product_col, 'amazon_account'])[profit_col].agg(
                         ['sum', 'count', 'mean']).round(2)
@@ -558,7 +580,7 @@ def main_dashboard_content():
     except Exception as e:
         st.error(f"❌ Table display error: {str(e)}")
 
-    # Debug info (can be removed later) - UPDATED: Account info dahil
+    # Debug info - FIXED
     if st.sidebar.checkbox("🔧 Debug Mode"):
         st.sidebar.write("**Session State Debug:**")
         st.sidebar.write(f"Current Month: {current_month_key}")
@@ -567,7 +589,13 @@ def main_dashboard_content():
 
         if 'amazon_account' in df.columns:
             st.sidebar.write("**Account Info:**")
-            st.sidebar.write(f"Selected Account: {selected_account}")
+            st.sidebar.write(f"Filter Mode: {filter_mode}")
+            if filter_mode == "Select Multiple":
+                st.sidebar.write(f"Selected: {len(selected_accounts)} accounts")
+                for acc in selected_accounts[:3]:
+                    st.sidebar.write(f"  • {acc}")
+                if len(selected_accounts) > 3:
+                    st.sidebar.write(f"  • ... and {len(selected_accounts) - 3} more")
             st.sidebar.write(f"Unique Accounts: {df['amazon_account'].nunique()}")
             st.sidebar.write(f"Account List: {df['amazon_account'].unique().tolist()}")
 
