@@ -296,14 +296,15 @@ def main_dashboard_content():
     try:
         metrics = calculate_metrics(df)
 
-        # Main metrics row
-        col1, col2, col3, col4 = st.columns(4)
+        # Main metrics row - UPDATED: 5 kolon (Amazon Cost eklendi)
+        col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("📊 Total Orders", metrics['total_orders'])
         col2.metric("💰 Total Profit", f"${metrics['total_profit']:,.2f}")
-        col3.metric("📈 ROI", f"{metrics['roi']:.1f}%")
-        col4.metric("📊 Margin", f"{metrics['margin']:.1f}%")
+        col3.metric("💳 Total Cost", f"${metrics['total_cost']:,.2f}")  # 🆕 YENİ EKLENEN
+        col4.metric("📈 ROI", f"{metrics['roi']:.1f}%")
+        col5.metric("📊 Margin", f"{metrics['margin']:.1f}%")
 
-        # Secondary metrics row
+        # Secondary metrics row (aynı kalıyor)
         col1, col2, col3 = st.columns(3)
         col1.metric("✅ Profitable Orders", metrics['profitable_orders'])
         col2.metric("❌ Loss Orders", metrics['loss_orders'])
