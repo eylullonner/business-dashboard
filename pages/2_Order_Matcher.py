@@ -501,10 +501,15 @@ class DropshippingMatcher:
 
         return 0
 
-
     def extract_address_from_shipping_object(self, shipping_address_obj) -> Dict[str, str]:
-        """shippingAddress object'inden adres bilgilerini çıkar"""
-        if not shipping_address_obj:
+        """shippingAddress object'inden adres bilgilerini çıkar - NULL SAFE"""
+
+        # 🔧 FIX: Handle NaN/None/float values
+        if shipping_address_obj is None or pd.isna(shipping_address_obj):
+            return {}
+
+        # 🔧 FIX: Handle float/numeric values (NaN becomes float)
+        if isinstance(shipping_address_obj, (int, float)):
             return {}
 
         # String ise (mixed format)
@@ -535,6 +540,7 @@ class DropshippingMatcher:
                     }
                 return {}
 
+        # 🔧 FIX: Ensure it's a dictionary
         if not isinstance(shipping_address_obj, dict):
             return {}
 
@@ -619,15 +625,19 @@ class DropshippingMatcher:
         return '\n'.join(address_lines)
 
     def normalize_amazon_data_enhanced(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Amazon datasını normalize et - Geliştirilmiş address handling"""
+        """Amazon datasını normalize et - NULL SAFE address handling"""
         normalized_df = df.copy()
         format_type = self.detect_amazon_format(df)
 
         for idx, row in normalized_df.iterrows():
-            # 1. shippingAddress object'i varsa işle
-            if 'shippingAddress' in row and pd.notna(row['shippingAddress']):
-                shipping_obj = row['shippingAddress']
-                address_parts = self.extract_address_from_shipping_object(shipping_obj)
+            # 🔧 FIX: Safe shippingAddress handling
+            shipping_address = row.get('shippingAddress')
+
+            if (shipping_address is not None and
+                    not pd.isna(shipping_address) and
+                    not isinstance(shipping_address, (int, float))):
+
+                address_parts = self.extract_address_from_shipping_object(shipping_address)
 
                 if address_parts:
                     full_address = self.build_full_address_string(address_parts)
@@ -646,7 +656,7 @@ class DropshippingMatcher:
                         normalized_df.at[idx, 'ship_country'] = address_parts['country']
 
             # 2. Eski format ship_to field'ı varsa işle
-            elif 'ship_to' in row and pd.notna(row['ship_to']):
+            elif 'ship_to' in row and pd.notna(row['ship_to']) and not isinstance(row['ship_to'], (int, float)):
                 normalized_df.at[idx, 'full_address'] = str(row['ship_to'])
 
             # 3. Yeni format field mapping
@@ -738,12 +748,20 @@ class DropshippingMatcher:
     def calculate_match_score_with_international(self, ebay_order: Dict, amazon_order: Dict) -> Dict:
         """Enhanced matching with international eIS CO pattern detection"""
 
-        # 🧪 DEBUG: Show ALL eIS CO attempts
-        if 'shippingAddress' in amazon_order and 'name' in amazon_order['shippingAddress']:
-            amazon_name = amazon_order['shippingAddress']['name']
-            if 'eIS CO' in amazon_name:
+        # 🔧 FIX: Safe shipping address checking
+        shipping_address = amazon_order.get('shippingAddress')
+
+        # Check if shippingAddress exists and is a valid dict (not NaN/float)
+        if (shipping_address is not None and
+                isinstance(shipping_address, dict) and
+                'name' in shipping_address):
+
+            amazon_name = shipping_address['name']
+            if amazon_name and 'eIS CO' in str(amazon_name):
                 ebay_buyer = ebay_order.get('buyer_name', 'N/A')
                 ebay_country = ebay_order.get('ship_country', 'N/A')
+                # Debug logging if needed
+                print(f"DEBUG - eIS CO detected: {amazon_name} for eBay buyer: {ebay_buyer} ({ebay_country})")
 
         # STEP 1: Try international matching first
         international_result = self.international_matcher.calculate_international_match_score(
