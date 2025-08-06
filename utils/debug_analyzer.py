@@ -1,19 +1,21 @@
-# utils/debug_analyzer.py - ACCOUNT-SEPARATED VERSION
+# utils/debug_analyzer.py - COMPLETE VERSION with Unmatched eBay Analysis
 """
 Account-Separated Matching Debug Analyzer Module
 Analyzes each Amazon account separately to avoid cross-account confusion
+Enhanced with unmatched eBay orders analysis
 """
 
 import pandas as pd
 import streamlit as st
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional
+import json
 
 
 class AccountSeparatedDebugAnalyzer:
     """
     Account-separated debug analyzer for order matching process
-    Analyzes each Amazon account independently
+    Analyzes each Amazon account independently + unmatched eBay orders
     """
 
     def __init__(self):
@@ -141,12 +143,81 @@ class AccountSeparatedDebugAnalyzer:
 
         return 'N/A'
 
+    def analyze_unmatched_ebay_orders(self, original_ebay_files_data: List,
+                                      matched_results: pd.DataFrame) -> Dict:
+        """
+        NEW: Analyze which eBay orders are not matched with any Amazon order
+        """
+        if matched_results.empty:
+            return {}
+
+        # Get all matched eBay order numbers
+        matched_ebay_orders = set()
+        possible_fields = ['ebay_order_number', 'ebay_order_id', 'ebay_orderid']
+
+        for field in possible_fields:
+            if field in matched_results.columns:
+                matched_orders = matched_results[field].dropna().tolist()
+                matched_ebay_orders.update(matched_orders)
+                break
+
+        # Analyze each eBay file
+        unmatched_analysis = {}
+        total_unmatched = 0
+
+        for filename, ebay_df in original_ebay_files_data:
+            # Extract eBay order numbers from this file
+            file_ebay_orders = self.extract_ebay_order_numbers(ebay_df)
+
+            # Find unmatched orders in this file
+            unmatched_in_file = []
+            for order_num in file_ebay_orders:
+                if order_num not in matched_ebay_orders:
+                    # Get order details
+                    order_row = ebay_df[ebay_df['Order number'] == order_num]
+                    if not order_row.empty:
+                        order_data = order_row.iloc[0].to_dict()
+                        unmatched_in_file.append({
+                            'order_number': order_num,
+                            'buyer_name': order_data.get('Buyer name', 'N/A'),
+                            'item_title': order_data.get('Item title', 'N/A')[:60] + '...',
+                            'order_date': order_data.get('Order creation date', 'N/A'),
+                            'earnings': order_data.get('Order earnings', 'N/A'),
+                            'country': order_data.get('Ship to country', 'N/A'),
+                            'raw_data': order_data
+                        })
+
+            unmatched_analysis[filename] = {
+                'total_orders': len(file_ebay_orders),
+                'unmatched_count': len(unmatched_in_file),
+                'unmatched_orders': unmatched_in_file,
+                'match_rate': ((len(file_ebay_orders) - len(unmatched_in_file)) / len(file_ebay_orders) * 100) if len(
+                    file_ebay_orders) > 0 else 0
+            }
+
+            total_unmatched += len(unmatched_in_file)
+
+        return {
+            'total_unmatched_ebay': total_unmatched,
+            'file_breakdown': unmatched_analysis,
+            'total_files': len(original_ebay_files_data)
+        }
+
+    def extract_ebay_order_numbers(self, ebay_df: pd.DataFrame) -> List[str]:
+        """Extract eBay order numbers from DataFrame"""
+        possible_fields = ['Order number', 'order_number', 'orderNumber', 'order_id']
+
+        for field in possible_fields:
+            if field in ebay_df.columns:
+                return ebay_df[field].dropna().astype(str).tolist()
+
+        return []
+
     def show_isolated_account_analysis(self, original_amazon_files_data: List,
                                        original_ebay_files_data: List,
                                        matched_results: pd.DataFrame):
         """
-        Analyze each Amazon account as if it was matched independently
-        Simulates separate matching process for each account
+        ENHANCED: Analyze each Amazon account + unmatched eBay orders
         """
         if matched_results.empty:
             st.warning("⚠️ No matched results to analyze")
@@ -157,7 +228,7 @@ class AccountSeparatedDebugAnalyzer:
             st.error("❌ No amazon_account field found in matched results")
             return
 
-        st.markdown("#### 🏪 Isolated Account Analysis")
+        st.markdown("#### 🔍 Isolated Account Analysis")
         st.info(
             "🔍 **Analysis Method:** Each account analyzed as if it was matched independently against all eBay orders")
 
@@ -193,8 +264,93 @@ class AccountSeparatedDebugAnalyzer:
         with col4:
             st.metric("Total Matches", total_matched)
 
+        # 🆕 NEW: Unmatched eBay Orders Analysis
+        st.markdown("##### 📋 Unmatched eBay Orders Analysis")
+
+        unmatched_analysis = self.analyze_unmatched_ebay_orders(original_ebay_files_data, matched_results)
+
+        if unmatched_analysis:
+            # Unmatched summary
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Unmatched eBay", unmatched_analysis['total_unmatched_ebay'])
+            with col2:
+                total_ebay = sum(data['total_orders'] for data in unmatched_analysis['file_breakdown'].values())
+                match_rate = ((total_ebay - unmatched_analysis[
+                    'total_unmatched_ebay']) / total_ebay * 100) if total_ebay > 0 else 0
+                st.metric("Overall eBay Match Rate", f"{match_rate:.1f}%")
+            with col3:
+                st.metric("eBay Files Analyzed", unmatched_analysis['total_files'])
+
+            # File-by-file breakdown
+            st.markdown("**📁 Unmatched eBay Orders by File:**")
+
+            for filename, file_data in unmatched_analysis['file_breakdown'].items():
+                if file_data['unmatched_count'] > 0:
+                    status_icon = "❌" if file_data['match_rate'] < 90 else "⚠️" if file_data['match_rate'] < 95 else "✅"
+
+                    with st.expander(
+                            f"{status_icon} **{filename}** - {file_data['unmatched_count']} unmatched ({file_data['match_rate']:.1f}% match rate)"):
+
+                        # File statistics
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Total eBay Orders", file_data['total_orders'])
+                        with col2:
+                            st.metric("Unmatched Orders", file_data['unmatched_count'])
+                        with col3:
+                            st.metric("Match Rate", f"{file_data['match_rate']:.1f}%")
+
+                        # Unmatched orders table
+                        if file_data['unmatched_orders']:
+                            st.markdown("**🔍 Unmatched eBay Orders:**")
+
+                            unmatched_df = pd.DataFrame([
+                                {
+                                    'eBay Order': order['order_number'],
+                                    'Buyer': order['buyer_name'][:25] + (
+                                        '...' if len(order['buyer_name']) > 25 else ''),
+                                    'Product': order['item_title'][:40] + (
+                                        '...' if len(order['item_title']) > 40 else ''),
+                                    'Date': order['order_date'],
+                                    'Earnings': order['earnings'],
+                                    'Country': order['country']
+                                }
+                                for order in file_data['unmatched_orders'][:10]  # Show first 10
+                            ])
+
+                            st.dataframe(unmatched_df, use_container_width=True, hide_index=True)
+
+                            if len(file_data['unmatched_orders']) > 10:
+                                st.info(f"📋 Showing first 10 of {len(file_data['unmatched_orders'])} unmatched orders")
+
+                        # Download unmatched orders for this file
+                        unmatched_data = {
+                            'filename': filename,
+                            'analysis_date': datetime.now().isoformat(),
+                            'file_statistics': {
+                                'total_orders': file_data['total_orders'],
+                                'unmatched_count': file_data['unmatched_count'],
+                                'match_rate_percentage': file_data['match_rate']
+                            },
+                            'unmatched_orders': file_data['unmatched_orders']
+                        }
+
+                        unmatched_json = json.dumps(unmatched_data, indent=2, default=str)
+
+                        st.download_button(
+                            f"📄 Download Unmatched Orders - {filename}",
+                            data=unmatched_json,
+                            file_name=f"unmatched_ebay_{filename.replace('.json', '')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                            mime="application/json",
+                            key=f"download_unmatched_{filename}_{datetime.now().strftime('%H%M%S')}"
+                        )
+
+                else:
+                    st.success(f"✅ **{filename}** - All orders matched (100% match rate)")
+
         # Analyze each account independently
-        st.markdown("##### 🔍 Independent Account Analysis")
+        st.markdown("##### 🔍 Independent Amazon Account Analysis")
 
         account_summaries = []
 
@@ -290,7 +446,6 @@ class AccountSeparatedDebugAnalyzer:
                     'duplicate_orders': analysis['duplicate_orders']
                 }
 
-                import json
                 account_json = json.dumps(account_data, indent=2, default=str)
 
                 st.download_button(
@@ -304,47 +459,46 @@ class AccountSeparatedDebugAnalyzer:
         # Overall insights
         st.markdown("##### 🎯 Overall Insights")
 
-        total_missing = sum(summary['missing_count'] for summary in account_summaries)
+        total_missing_amazon = sum(summary['missing_count'] for summary in account_summaries)
         total_duplicates = sum(summary['duplicate_count'] for summary in account_summaries)
-        avg_efficiency = sum(summary['efficiency'] for summary in account_summaries) / len(account_summaries)
+        total_unmatched_ebay = unmatched_analysis.get('total_unmatched_ebay', 0)
 
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            st.metric("Total Missing Orders", total_missing)
+            st.metric("Missing Amazon Orders", total_missing_amazon)
 
         with col2:
-            st.metric("Total Duplicate Matches", total_duplicates)
+            st.metric("Duplicate Amazon Matches", total_duplicates)
 
         with col3:
-            problematic_accounts = sum(1 for summary in account_summaries if summary['has_issues'])
-            st.metric("Accounts with Issues", problematic_accounts)
+            st.metric("Unmatched eBay Orders", total_unmatched_ebay)
 
-        # Recommendations
-        with st.expander("💡 Optimization Recommendations"):
+        # Enhanced recommendations
+        with st.expander("💡 Enhanced Optimization Recommendations"):
             st.markdown("""
-            **Based on Independent Account Analysis:**
+            **Based on Complete Order Analysis:**
 
-            **For Low Efficiency Accounts:**
-            - Review matching thresholds specifically for underperforming accounts
-            - Check for account-specific patterns (product types, customer regions, etc.)
-            - Consider account-specific matching rules
+            **For Unmatched eBay Orders:**
+            - Check if these are cancelled/refunded orders
+            - Verify customer names and addresses match Amazon format
+            - Look for international orders that may need eIS CO detection
+            - Consider date range mismatches between eBay and Amazon
 
-            **For Missing Orders:**
+            **For Missing Amazon Orders:**
             - Verify delivery statuses (returns, cancellations)
-            - Check date ranges and timing
-            - Look for address format differences
-            - Consider international shipping patterns
+            - Check for address format differences
+            - Look for account-specific patterns
 
             **For Duplicate Matches:**
             - May indicate legitimate business cases (bulk orders, family orders)
             - Consider quantity-based matching rules
-            - Review customer patterns (same buyer, multiple orders)
+            - Review customer patterns
 
-            **Account-Specific Strategies:**
-            - High-performing accounts: Maintain current settings
-            - Low-performing accounts: Adjust thresholds or add custom rules
-            - Consider account grouping by performance characteristics
+            **File-Specific Issues:**
+            - Files with low match rates may have data quality issues
+            - Check date formats and field mappings
+            - Verify account extraction from filenames
             """)
 
     def simulate_independent_matching(self, account_name: str,
